@@ -15,6 +15,7 @@ import {
 } from './student/directories.js';
 import { InMemoryEmailSender, WebhookEmailSender } from './student/email.js';
 import { FakePushSender, WebPushSender } from './student/webpush.js';
+import { HttpOrganizationClient } from './incidents/organization.js';
 import { createJwksAccessTokenVerifier } from './vendor/jwt-verify.js';
 
 const env = process.env;
@@ -60,6 +61,14 @@ const { app } = buildApp({
       }
     : {}),
   ...(env.INTERNAL_API_TOKEN ? { internalToken: env.INTERNAL_API_TOKEN } : {}),
+  ...(env.ADMIN_API_TOKEN ? { adminToken: env.ADMIN_API_TOKEN } : {}),
+  ...(env.ORGANIZATION_URL
+    ? {
+        organization: new HttpOrganizationClient(env.ORGANIZATION_URL, {
+          token: env.SERVICE_TOKEN,
+        }),
+      }
+    : {}),
   ...(env.STUDENT_WEB_URL ? { studentWebUrl: env.STUDENT_WEB_URL } : {}),
 });
 

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import type { AuditClient } from './audit.js';
+import type { AlertAuditAction, AuditClient } from './audit.js';
+import type { OrganizationClient } from './incidents/organization.js';
 import type { AlertNotification, NotificationChannel, RecipientDirectory } from './channels.js';
 import {
   ALERT_POLICY,
@@ -8,6 +9,9 @@ import {
   type Alert,
   type AlertCondition,
   type AlertRule,
+  type IncidentComment,
+  type ResolutionCode,
+  slaDueAt,
 } from './domain.js';
 import type { ClassWindow, DeviceSnapshot, EvaluateRequest, EventEnvelope } from './schemas.js';
 import type { AlertStore } from './store.js';
@@ -25,6 +29,18 @@ export interface EngineDeps {
   audit: AuditClient;
   clock: () => Date;
   logger: Logger;
+  organization?: OrganizationClient | undefined;
+}
+
+/** Domain error for incident workflow violations (mapped to HTTP by the routes). */
+export class IncidentError extends Error {
+  constructor(
+    readonly statusCode: number,
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+  }
 }
 
 export interface EngineResult {
@@ -359,6 +375,9 @@ export class AlertEngine {
         resourceId: c.resourceId,
         institutionId: c.institutionId ?? null,
         classroomId: c.classroomId ?? null,
+        campusId: null,
+        classroomName: null,
+        campusName: null,
         deviceId: c.deviceId ?? null,
         scheduledClassId: c.scheduledClassId ?? null,
         recordingSessionId: c.recordingSessionId ?? null,
@@ -378,10 +397,17 @@ export class AlertEngine {
         resolvedBy: null,
         resolution: null,
         resolutionNote: null,
+        assigneeId: null,
+        assignedAt: null,
+        inProgressAt: null,
+        resolutionCode: null,
+        slaDueAt: slaDueAt(nowIso, c.severity),
       };
+      await this.locate(alert);
       await this.notify(alert, 'raised', now);
       await store.save(alert);
       await this.audit('alert.raised', alert, null, { rule: alert.rule, severity: alert.severity });
+      await this.activity(alert, 'raised', null, alert.message, now);
       this.deps.logger.warn(
         { alertId: alert.id, rule: alert.rule, resourceId: alert.resourceId },
         'alert raised',
@@ -403,10 +429,24 @@ export class AlertEngine {
       lastSeenAt: nowIso,
       occurrences: existing.occurrences + 1,
     };
+    if (!alert.campusId) await this.locate(alert);
     if (escalated) {
-      // escalation re-opens an acknowledged alert and notifies immediately
-      alert.status = 'open';
+      // escalation tightens the SLA, re-opens an acknowledged alert (work already in
+      // progress stays in progress) and notifies immediately
+      alert.slaDueAt = slaDueAt(alert.firstRaisedAt, alert.severity);
+      if (alert.status === 'acknowledged') alert.status = 'open';
       await this.notify(alert, 'escalated', now);
+      await this.audit('alert.escalated', alert, null, {
+        from: existing.severity,
+        to: alert.severity,
+      });
+      await this.activity(
+        alert,
+        'escalated',
+        null,
+        `${existing.severity} → ${alert.severity}`,
+        now,
+      );
     } else if (alert.status === 'open' && this.cooldownElapsed(alert, now)) {
       await this.notify(alert, 'reminder', now);
     }
@@ -435,26 +475,115 @@ export class AlertEngine {
     await this.deps.store.save(alert);
     await this.notify(alert, 'resolved', now, false);
     await this.audit('alert.resolved', alert, null, { resolution: 'auto' });
+    await this.activity(alert, 'resolved', null, 'auto: condição normalizada', now);
     return alert;
   }
 
+  private async load(id: string): Promise<Alert> {
+    const alert = await this.deps.store.get(id);
+    if (!alert) throw new IncidentError(404, 'not_found', 'Incident not found');
+    return alert;
+  }
+
+  private assertOpen(alert: Alert): void {
+    if (alert.status === 'resolved') {
+      throw new IncidentError(409, 'incident_resolved', 'Incident is already resolved');
+    }
+  }
+
+  async get(id: string): Promise<Alert | undefined> {
+    return this.deps.store.get(id);
+  }
+
+  /** open → acknowledged (idempotent for acknowledged / in_progress). */
   async acknowledge(id: string, actorId: string, note?: string): Promise<Alert | undefined> {
     const alert = await this.deps.store.get(id);
     if (!alert) return undefined;
     if (alert.status !== 'open') return alert;
+    const now = this.deps.clock();
     const updated: Alert = {
       ...alert,
       status: 'acknowledged',
-      acknowledgedAt: this.deps.clock().toISOString(),
+      acknowledgedAt: now.toISOString(),
       acknowledgedBy: actorId,
       resolutionNote: note ?? alert.resolutionNote,
     };
     await this.deps.store.save(updated);
     await this.audit('alert.acknowledged', updated, actorId, { note: note ?? null });
+    await this.activity(updated, 'acknowledged', actorId, note ?? null, now);
     return updated;
   }
 
-  async resolve(id: string, actorId: string, note?: string): Promise<Alert | undefined> {
+  /** open | acknowledged → in_progress. Counts as acknowledgement for MTTA. */
+  async startProgress(id: string, actorId: string, note?: string): Promise<Alert> {
+    const alert = await this.load(id);
+    this.assertOpen(alert);
+    if (alert.status === 'in_progress') return alert;
+    const now = this.deps.clock().toISOString();
+    const updated: Alert = {
+      ...alert,
+      status: 'in_progress',
+      inProgressAt: now,
+      acknowledgedAt: alert.acknowledgedAt ?? now,
+      acknowledgedBy: alert.acknowledgedBy ?? actorId,
+      // whoever starts working on an unassigned incident owns it
+      assigneeId: alert.assigneeId ?? actorId,
+      assignedAt: alert.assignedAt ?? now,
+    };
+    await this.deps.store.save(updated);
+    await this.audit('alert.in_progress', updated, actorId, { note: note ?? null });
+    await this.activity(updated, 'in_progress', actorId, note ?? null, new Date(now));
+    return updated;
+  }
+
+  async assign(id: string, assigneeId: string, actorId: string): Promise<Alert> {
+    const alert = await this.load(id);
+    this.assertOpen(alert);
+    if (alert.assigneeId === assigneeId) return alert;
+    const now = this.deps.clock();
+    const updated: Alert = { ...alert, assigneeId, assignedAt: now.toISOString() };
+    await this.deps.store.save(updated);
+    await this.audit('alert.assigned', updated, actorId, {
+      assigneeId,
+      previousAssigneeId: alert.assigneeId,
+    });
+    await this.activity(updated, 'assigned', actorId, assigneeId, now);
+    return updated;
+  }
+
+  async comment(
+    id: string,
+    actorId: string,
+    body: string,
+  ): Promise<{ alert: Alert; comment: IncidentComment }> {
+    const alert = await this.load(id);
+    const now = this.deps.clock();
+    const comment: IncidentComment = {
+      id: randomUUID(),
+      alertId: alert.id,
+      actorId,
+      body,
+      createdAt: now.toISOString(),
+    };
+    await this.deps.store.addComment(comment);
+    await this.audit('alert.commented', alert, actorId, {
+      commentId: comment.id,
+      length: body.length,
+    });
+    await this.activity(alert, 'commented', actorId, null, now);
+    return { alert, comment };
+  }
+
+  /**
+   * Manual resolution. The incident API requires a `resolutionCode` (Phase 4 §4); the
+   * Phase 1 alert API (`/v1/alerts/:id/resolve`) still accepts none for compatibility.
+   */
+  async resolve(
+    id: string,
+    actorId: string,
+    note?: string,
+    resolutionCode?: ResolutionCode,
+  ): Promise<Alert | undefined> {
     const alert = await this.deps.store.get(id);
     if (!alert) return undefined;
     if (alert.status === 'resolved') return alert;
@@ -465,15 +594,45 @@ export class AlertEngine {
       resolvedAt: now.toISOString(),
       resolvedBy: actorId,
       resolution: 'manual',
+      resolutionCode: resolutionCode ?? null,
       resolutionNote: note ?? null,
     };
     await this.deps.store.save(updated);
     await this.notify(updated, 'resolved', now, false);
     await this.audit('alert.resolved', updated, actorId, {
       resolution: 'manual',
+      resolutionCode: resolutionCode ?? null,
       note: note ?? null,
     });
+    await this.activity(updated, 'resolved', actorId, resolutionCode ?? null, now);
     return updated;
+  }
+
+  /** Fills campus / names / institution from the classroom (best effort). */
+  private async locate(alert: Alert): Promise<void> {
+    if (!alert.classroomId || !this.deps.organization) return;
+    const loc = await this.deps.organization.locateClassroom(alert.classroomId);
+    if (!loc) return;
+    alert.campusId = loc.campusId;
+    alert.campusName = loc.campusName;
+    alert.classroomName = loc.classroomName;
+    alert.institutionId = alert.institutionId ?? loc.institutionId;
+  }
+
+  private async activity(
+    alert: Alert,
+    action: string,
+    actorId: string | null,
+    detail: string | null,
+    at: Date,
+  ): Promise<void> {
+    await this.deps.store.addActivity({
+      alertId: alert.id,
+      at: at.toISOString(),
+      action,
+      actorId,
+      detail,
+    });
   }
 
   // ------------------------------------------------------------------ side effects
@@ -552,7 +711,7 @@ export class AlertEngine {
   }
 
   private async audit(
-    action: 'alert.raised' | 'alert.acknowledged' | 'alert.resolved',
+    action: AlertAuditAction,
     alert: Alert,
     actorId: string | null,
     metadata: Record<string, unknown>,

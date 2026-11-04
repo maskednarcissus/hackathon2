@@ -7,7 +7,7 @@ import {
   type AccessTokenClaims,
   type AccessTokenVerifier,
 } from '../vendor/jwt-verify.js';
-import type { StudentNotifier } from './notifier.js';
+import { notificationLink, type StudentNotifier } from './notifier.js';
 import { applyUpdate, PreferencesError, PreferencesUpdateSchema } from './preferences.js';
 import type { StudentStore } from './store.js';
 import { fromB64url } from './webpush.js';
@@ -36,7 +36,7 @@ const ListQuery = z.object({
 });
 const NowBody = z.object({ now: z.string().datetime({ offset: true }).optional() }).default({});
 
-const b64urlBytes = (len: number) =>
+const b64urlBytes = (len: number): z.ZodEffects<z.ZodString> =>
   z
     .string()
     .regex(/^[A-Za-z0-9_-]+=*$/, 'base64url expected')
@@ -115,7 +115,19 @@ export function registerStudentRoutes(app: FastifyInstance, deps: StudentRouteDe
       ...(q.before ? { before: q.before } : {}),
     });
     return {
-      items: items.map(({ dedupeKey: _d, inApp: _i, ...rest }) => rest),
+      // shape = AppNotification in apps/student-web/src/lib/types.ts
+      items: items.map((n) => {
+        const link = notificationLink(n);
+        return {
+          id: n.id,
+          category: n.category,
+          title: n.title,
+          body: n.body,
+          createdAt: n.createdAt,
+          readAt: n.readAt,
+          ...(link ? { link } : {}),
+        };
+      }),
       unreadCount: await store.countUnread(userId),
       nextBefore: items.length === q.limit ? (items.at(-1)?.createdAt ?? null) : null,
     };

@@ -30,6 +30,17 @@ import {
 } from './student/webpush.js';
 import { createAccessTokenVerifier } from './vendor/jwt-verify.js';
 
+/** Response bodies used in assertions (typed for lint; fields are a superset). */
+interface Body {
+  error: { code: string };
+  studentNotifications: { created: number; recipients: number; duplicates: number };
+  items: Record<string, unknown>[];
+  categories: Record<string, unknown>;
+  reminderOffsetsHours: number[];
+  id: string;
+  created: number;
+}
+
 const INST = '6f1c2e8a-1b2c-4d5e-8f90-1234567890ab';
 const SECTION = '11111111-1111-4111-8111-111111111111';
 const OTHER_SECTION = '22222222-2222-4222-8222-222222222222';
@@ -157,7 +168,7 @@ describe('student notifications — fan-out', () => {
       calendarEventId: cal.id,
     });
     expect(res.statusCode).toBe(202);
-    expect(res.json().studentNotifications).toMatchObject({
+    expect(res.json<Body>().studentNotifications).toMatchObject({
       category: 'new_assessment',
       created: 3,
       recipients: 3,
@@ -187,7 +198,7 @@ describe('student notifications — fan-out', () => {
     const cal = t.calEvent();
     await t.event('event.published', { calendarEventId: cal.id });
     const again = await t.event('event.published', { calendarEventId: cal.id });
-    expect(again.json().studentNotifications).toMatchObject({ created: 0, duplicates: 3 });
+    expect(again.json<Body>().studentNotifications).toMatchObject({ created: 0, duplicates: 3 });
     expect((await t.inbox('user-b')).items).toHaveLength(1);
     expect(t.email.sent).toHaveLength(3);
   });
@@ -203,12 +214,13 @@ describe('student notifications — fan-out', () => {
       eventId: cal.extractedEventId,
       fields: ['title'],
     });
-    expect(silent.json().studentNotifications).toMatchObject({
+    expect(silent.json<Body>().studentNotifications).toMatchObject({
       created: 0,
       skippedReason: 'no_date_change',
     });
 
     // resolved via extractedEventId → tracked calendarEventId
+    t.setNow('2026-11-04T16:00:00.000Z');
     t.calendar.events.set(cal.id, {
       ...cal,
       title: 'P1 (sala 3)',
@@ -219,7 +231,7 @@ describe('student notifications — fan-out', () => {
       eventId: cal.extractedEventId,
       field: 'eventDate',
     });
-    expect(changed.json().studentNotifications).toMatchObject({
+    expect(changed.json<Body>().studentNotifications).toMatchObject({
       category: 'deadline_change',
       created: 3,
     });
@@ -233,7 +245,7 @@ describe('student notifications — fan-out', () => {
     await t.sync();
     const cal = t.calEvent({ type: 'class_cancellation', title: 'Aula de 06/11' });
     const pub = await t.event('event.published', { calendarEventId: cal.id });
-    expect(pub.json().studentNotifications).toMatchObject({
+    expect(pub.json<Body>().studentNotifications).toMatchObject({
       category: 'class_cancellation',
       created: 3,
     });
@@ -243,12 +255,12 @@ describe('student notifications — fan-out', () => {
     await t.event('event.published', { calendarEventId: exam.id });
     t.calendar.events.set(exam.id, { ...exam, status: 'cancelled', version: 2 });
     const r = await t.event('calendar.event_updated', { calendarEventId: exam.id });
-    expect(r.json().studentNotifications).toMatchObject({
+    expect(r.json<Body>().studentNotifications).toMatchObject({
       category: 'class_cancellation',
       created: 3,
     });
     const again = await t.event('calendar.event_updated', { calendarEventId: exam.id });
-    expect(again.json().studentNotifications.created).toBe(0);
+    expect(again.json<Body>().studentNotifications.created).toBe(0);
   });
 
   it('lecture.structured resolves the section via academic-integration', async () => {
@@ -265,7 +277,7 @@ describe('student notifications — fan-out', () => {
       transcriptId: randomUUID(),
       lectureSummaryId: randomUUID(),
     });
-    expect(r.json().studentNotifications).toMatchObject({
+    expect(r.json<Body>().studentNotifications).toMatchObject({
       category: 'lecture_summary',
       created: 3,
     });
@@ -294,7 +306,46 @@ describe('student notifications — fan-out', () => {
       },
     });
     expect(res.statusCode).toBe(503);
-    expect(res.json().error.code).toBe('dependency_unavailable');
+    expect(res.json<Body>().error.code).toBe('dependency_unavailable');
+  });
+
+  it('inbox items match the student-web AppNotification shape with deep links', async () => {
+    const t = setup();
+    await t.sync();
+    const cal = t.calEvent();
+    await t.event('event.published', { calendarEventId: cal.id });
+    t.setNow('2026-11-04T16:00:00.000Z');
+    const scheduledClassId = randomUUID();
+    await t.event('lecture.structured', {
+      scheduledClassId,
+      classSectionId: SECTION,
+      lectureSummaryId: randomUUID(),
+    });
+    const res = await t.inject('GET', '/v1/users/user-a/notifications');
+    const [lecture, exam] = res.json<Body>().items;
+    expect(Object.keys(exam!).sort()).toEqual([
+      'body',
+      'category',
+      'createdAt',
+      'id',
+      'link',
+      'readAt',
+      'title',
+    ]);
+    expect(exam).toMatchObject({
+      category: 'new_assessment',
+      readAt: null,
+      link: `/calendario/${cal.id}`,
+    });
+    expect(lecture).toMatchObject({
+      category: 'lecture_summary',
+      link: `/aulas/${scheduledClassId}`,
+    });
+    // a PUT echoing the GET body (userId, updatedAt) is accepted
+    const prefs = (await t.inject('GET', '/v1/users/user-a/notification-preferences')).json<Body>();
+    expect(
+      (await t.inject('PUT', '/v1/users/user-a/notification-preferences', prefs)).statusCode,
+    ).toBe(200);
   });
 
   it('inbox: unread filter, read, read-all', async () => {
@@ -310,7 +361,7 @@ describe('student notifications — fan-out', () => {
       'POST',
       `/v1/users/user-a/notifications/${inbox.items[0]!.id}/read`,
     );
-    expect(read.json()).toMatchObject({ unreadCount: 1 });
+    expect(read.json<Body>()).toMatchObject({ unreadCount: 1 });
     expect((await t.inbox('user-a', '?unread=false')).items).toHaveLength(1);
     // another user cannot mark it
     expect(
@@ -318,7 +369,7 @@ describe('student notifications — fan-out', () => {
         .statusCode,
     ).toBe(404);
     expect(
-      (await t.inject('POST', '/v1/users/user-a/notifications/read-all')).json(),
+      (await t.inject('POST', '/v1/users/user-a/notifications/read-all')).json<Body>(),
     ).toMatchObject({ updated: 1 });
     expect((await t.inbox('user-a')).unreadCount).toBe(0);
   });
@@ -331,16 +382,16 @@ describe('student notifications — fan-out', () => {
       mode: 'replace',
       enrollments: [{ ...students[0]!, classSectionId: SECTION }],
     });
-    expect(r.json()).toEqual({ upserted: 1, withdrawn: 2 });
+    expect(r.json<Body>()).toEqual({ upserted: 1, withdrawn: 2 });
     const pub = await t.event('event.published', { calendarEventId: t.calEvent().id });
-    expect(pub.json().studentNotifications.recipients).toBe(1);
+    expect(pub.json<Body>().studentNotifications.recipients).toBe(1);
   });
 });
 
 describe('student notifications — preferences (3.12)', () => {
   it('returns defaults and merges partial updates', async () => {
     const t = setup();
-    const def = (await t.inject('GET', '/v1/users/user-a/notification-preferences')).json();
+    const def = (await t.inject('GET', '/v1/users/user-a/notification-preferences')).json<Body>();
     expect(def).toMatchObject({ reminderOffsetsHours: [24, 2], quietHours: null });
     expect(def.categories.deadline_change).toEqual({ in_app: true, email: true, push: true });
     const put = await t.inject('PUT', '/v1/users/user-a/notification-preferences', {
@@ -348,12 +399,12 @@ describe('student notifications — preferences (3.12)', () => {
       reminderOffsetsHours: [2, 48],
     });
     expect(put.statusCode).toBe(200);
-    expect(put.json().categories.new_assessment).toEqual({
+    expect(put.json<Body>().categories.new_assessment).toEqual({
       in_app: true,
       email: false,
       push: true,
     });
-    expect(put.json().reminderOffsetsHours).toEqual([48, 2]);
+    expect(put.json<Body>().reminderOffsetsHours).toEqual([48, 2]);
   });
 
   it('locks in_app for critical categories', async () => {
@@ -363,7 +414,7 @@ describe('student notifications — preferences (3.12)', () => {
         categories: { [category]: { in_app: false } },
       });
       expect(r.statusCode).toBe(422);
-      expect(r.json().error.code).toBe('critical_in_app_locked');
+      expect(r.json<Body>().error.code).toBe('critical_in_app_locked');
     }
     const ok = await t.inject('PUT', '/v1/users/user-a/notification-preferences', {
       categories: { lecture_summary: { in_app: false }, deadline_change: { email: false } },
@@ -436,11 +487,11 @@ describe('student notifications — quiet hours', () => {
     const early = await t.inject('POST', '/v1/notifications/flush-deferred', {
       now: '2026-11-05T09:59:00Z',
     });
-    expect(early.json()).toEqual({ flushed: 0, remaining: 2 });
+    expect(early.json<Body>()).toEqual({ flushed: 0, remaining: 2 });
     const flush = await t.inject('POST', '/v1/notifications/flush-deferred', {
       now: '2026-11-05T10:00:00Z',
     });
-    expect(flush.json()).toEqual({ flushed: 2, remaining: 0 });
+    expect(flush.json<Body>()).toEqual({ flushed: 2, remaining: 0 });
     expect(t.email.sent.map((m) => m.to)).toContain('a@aluno.example');
     expect(t.push.sent).toHaveLength(1);
   });
@@ -470,7 +521,7 @@ describe('student notifications — reminders', () => {
     // exam 10/11 19:00 São Paulo = 22:00Z
     await t.event('event.published', { calendarEventId: t.calEvent().id });
     const run = (now: string) =>
-      t.inject('POST', '/v1/reminders/run', { now }).then((r) => r.json());
+      t.inject('POST', '/v1/reminders/run', { now }).then((r) => r.json<Body>());
 
     expect((await run('2026-11-09T21:59:00Z')).created).toBe(0);
     expect(await run('2026-11-09T22:00:00Z')).toMatchObject({ created: 2, events: 1 }); // a, b
@@ -495,7 +546,7 @@ describe('student notifications — reminders', () => {
     const cal = t.calEvent();
     await t.event('event.published', { calendarEventId: cal.id });
     const run = (now: string) =>
-      t.inject('POST', '/v1/reminders/run', { now }).then((r) => r.json());
+      t.inject('POST', '/v1/reminders/run', { now }).then((r) => r.json<Body>());
     expect((await run('2026-11-10T19:00:00Z')).created).toBe(3); // 24 h (not 2 h yet)
     expect((await run('2026-11-10T20:30:00Z')).created).toBe(3); // 2 h
     t.calendar.events.set(cal.id, { ...cal, eventDate: '2026-11-12', version: 2 });
@@ -513,7 +564,7 @@ describe('student notifications — reminders', () => {
     t.calendar.events.set(exam.id, { ...exam, status: 'cancelled', version: 2 });
     await t.event('event.updated', { calendarEventId: exam.id });
     expect(
-      (await t.inject('POST', '/v1/reminders/run', { now: '2026-11-10T21:00:00Z' })).json(),
+      (await t.inject('POST', '/v1/reminders/run', { now: '2026-11-10T21:00:00Z' })).json<Body>(),
     ).toMatchObject({
       created: 0,
       events: 0,
@@ -537,11 +588,15 @@ describe('push subscriptions & Web Push', () => {
       keys: { ...body.keys, auth: 'AAAA' },
     });
     expect(short.statusCode).toBe(400);
-    const first = (await t.inject('POST', '/v1/users/user-a/push-subscriptions', body)).json();
-    const second = (await t.inject('POST', '/v1/users/user-a/push-subscriptions', body)).json();
+    const first = (
+      await t.inject('POST', '/v1/users/user-a/push-subscriptions', body)
+    ).json<Body>();
+    const second = (
+      await t.inject('POST', '/v1/users/user-a/push-subscriptions', body)
+    ).json<Body>();
     expect(second.id).toBe(first.id);
     expect(
-      (await t.inject('GET', '/v1/users/user-a/push-subscriptions')).json().items,
+      (await t.inject('GET', '/v1/users/user-a/push-subscriptions')).json<Body>().items,
     ).toHaveLength(1);
     expect(
       (await t.inject('DELETE', `/v1/users/user-b/push-subscriptions/${first.id}`)).statusCode,
@@ -549,7 +604,7 @@ describe('push subscriptions & Web Push', () => {
     expect(
       (await t.inject('DELETE', `/v1/users/user-a/push-subscriptions/${first.id}`)).statusCode,
     ).toBe(204);
-    expect((await t.inject('GET', '/v1/push/vapid-public-key')).json()).toEqual({
+    expect((await t.inject('GET', '/v1/push/vapid-public-key')).json<Body>()).toEqual({
       publicKey: 'BPUB',
     });
   });
@@ -564,7 +619,7 @@ describe('push subscriptions & Web Push', () => {
     t.push.statusByEndpoint.set('https://push.example.com/gone', 410);
     await t.event('event.published', { calendarEventId: t.calEvent().id });
     expect(
-      (await t.inject('GET', '/v1/users/user-a/push-subscriptions')).json().items,
+      (await t.inject('GET', '/v1/users/user-a/push-subscriptions')).json<Body>().items,
     ).toHaveLength(0);
   });
 
@@ -574,7 +629,7 @@ describe('push subscriptions & Web Push', () => {
     const jwt = buildVapidJwt('https://fcm.googleapis.com', 'mailto:ops@example.com', keys, now);
     const [h, c, sig] = jwt.split('.') as [string, string, string];
     expect(JSON.parse(fromB64url(h).toString())).toEqual({ typ: 'JWT', alg: 'ES256' });
-    const claims = JSON.parse(fromB64url(c).toString());
+    const claims = JSON.parse(fromB64url(c).toString()) as Record<string, unknown>;
     expect(claims).toEqual({
       aud: 'https://fcm.googleapis.com',
       exp: 1793793600 + 12 * 3600,
@@ -641,7 +696,9 @@ describe('push subscriptions & Web Push', () => {
     expect(headers['content-encoding']).toBe('aes128gcm');
     expect(headers.urgency).toBe('high');
     expect(headers.authorization).toMatch(/^vapid t=[\w-]+\.[\w-]+\.[\w-]+, k=[\w-]+$/);
-    const jwtClaims = JSON.parse(fromB64url(headers.authorization!.split('.')[1]!).toString());
+    const jwtClaims = JSON.parse(fromB64url(headers.authorization!.split('.')[1]!).toString()) as {
+      aud: string;
+    };
     expect(jwtClaims.aud).toBe('https://updates.push.services.mozilla.com');
 
     // user-agent side decryption (RFC 8291 §3.4, independent of the sender code)

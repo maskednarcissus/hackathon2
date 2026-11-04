@@ -56,6 +56,9 @@ export const PreferencesUpdateSchema = z
       .max(5)
       .refine((a) => new Set(a).size === a.length, 'offsets must be unique')
       .optional(),
+    /** Echoes of the GET response are accepted and ignored. */
+    userId: z.string().optional(),
+    updatedAt: z.string().nullable().optional(),
   })
   .strict();
 export type PreferencesUpdate = z.infer<typeof PreferencesUpdateSchema>;

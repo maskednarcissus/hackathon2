@@ -1,9 +1,13 @@
-import Fastify, { type FastifyInstance } from 'fastify';
+import { timingSafeEqual } from 'node:crypto';
+import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import { ZodError } from 'zod';
 import { InMemoryAuditClient, type AuditClient } from './audit.js';
 import { InMemoryChannel, RecipientDirectory, type NotificationChannel } from './channels.js';
 import { AlertEngine } from './engine.js';
 import { HttpError, parse, sendError } from './http.js';
+import { createAdminAuth } from './incidents/auth.js';
+import type { OrganizationClient } from './incidents/organization.js';
+import { registerIncidentRoutes } from './incidents/routes.js';
 import {
   AlertActionSchema,
   AlertQuerySchema,
@@ -45,6 +49,10 @@ export interface AppDeps {
   verifyToken?: AccessTokenVerifier;
   internalToken?: string;
   studentWebUrl?: string;
+  // Phase 4 — incident queue (4.8)
+  organization?: OrganizationClient;
+  /** Static bearer for admin routes (`ADMIN_API_TOKEN`); identity JWTs with coordinator/admin also accepted. */
+  adminToken?: string;
 }
 
 export function buildApp(deps: AppDeps = {}): {
@@ -62,7 +70,21 @@ export function buildApp(deps: AppDeps = {}): {
     audit: deps.audit ?? new InMemoryAuditClient(),
     clock,
     logger: app.log,
+    organization: deps.organization,
   });
+  const authenticateAdmin = createAdminAuth({
+    adminToken: deps.adminToken,
+    verifyToken: deps.verifyToken,
+  });
+  /** Internal (service-to-service) routes: `x-internal-token` when configured. */
+  const authorizeInternal = (req: FastifyRequest): void => {
+    if (!deps.internalToken) return;
+    const given = Buffer.from(String(req.headers['x-internal-token'] ?? ''));
+    const expected = Buffer.from(deps.internalToken);
+    if (given.length !== expected.length || !timingSafeEqual(given, expected)) {
+      throw new HttpError(401, 'unauthorized', 'Internal token required');
+    }
+  };
   const studentStore = deps.studentStore ?? new InMemoryStudentStore();
   const notifier = new StudentNotifier({
     store: studentStore,
@@ -102,6 +124,7 @@ export function buildApp(deps: AppDeps = {}): {
    * (alert dedupe key; student dedupe key), so a 503 here is safe to retry.
    */
   app.post('/v1/lifecycle-events', async (req, reply) => {
+    authorizeInternal(req);
     const event = parse(EventEnvelopeSchema, req.body);
     const result = await engine.handleEvent(event);
     let students: Awaited<ReturnType<StudentNotifier['handleEvent']>>;
@@ -125,24 +148,28 @@ export function buildApp(deps: AppDeps = {}): {
   });
 
   app.post('/v1/alerts/evaluate', async (req) => {
+    authorizeInternal(req);
     const input = parse(EvaluateRequestSchema, req.body ?? {});
     const result = await engine.evaluate(input);
     return { raised: result.raised, updated: result.updated, resolved: result.resolved };
   });
 
   app.get('/v1/alerts', async (req) => {
+    await authenticateAdmin(req);
     const query = parse(AlertQuerySchema, req.query);
     const alerts = await store.list(query);
     return { alerts, count: alerts.length };
   });
 
   app.get<{ Params: { id: string } }>('/v1/alerts/:id', async (req) => {
+    await authenticateAdmin(req);
     const alert = await store.get(req.params.id);
     if (!alert) throw new HttpError(404, 'not_found', 'Alert not found');
     return { alert, deliveries: await store.deliveries(alert.id) };
   });
 
   app.post<{ Params: { id: string } }>('/v1/alerts/:id/acknowledge', async (req) => {
+    await authenticateAdmin(req);
     const body = parse(AlertActionSchema, req.body);
     const alert = await engine.acknowledge(req.params.id, body.actorId, body.note);
     if (!alert) throw new HttpError(404, 'not_found', 'Alert not found');
@@ -150,11 +177,14 @@ export function buildApp(deps: AppDeps = {}): {
   });
 
   app.post<{ Params: { id: string } }>('/v1/alerts/:id/resolve', async (req) => {
+    await authenticateAdmin(req);
     const body = parse(AlertActionSchema, req.body);
     const alert = await engine.resolve(req.params.id, body.actorId, body.note);
     if (!alert) throw new HttpError(404, 'not_found', 'Alert not found');
     return { alert };
   });
+
+  registerIncidentRoutes(app, { engine, store, clock, authenticate: authenticateAdmin });
 
   registerStudentRoutes(app, {
     store: studentStore,

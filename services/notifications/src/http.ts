@@ -1,5 +1,5 @@
 import type { FastifyReply } from 'fastify';
-import type { ZodTypeAny, z } from 'zod';
+import type { z } from 'zod';
 
 export class HttpError extends Error {
   constructor(
@@ -12,12 +12,12 @@ export class HttpError extends Error {
   }
 }
 
-export function parse<S extends ZodTypeAny>(schema: S, value: unknown): z.infer<S> {
+export function parse<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, value: unknown): T {
   const result = schema.safeParse(value);
   if (!result.success) {
     throw new HttpError(400, 'validation_error', 'Invalid request', result.error.flatten());
   }
-  return result.data as z.infer<S>;
+  return result.data;
 }
 
 export const sendError = (reply: FastifyReply, err: HttpError): FastifyReply =>

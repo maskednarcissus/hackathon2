@@ -13,7 +13,7 @@ export type AlertRule = (typeof ALERT_RULES)[number];
 export const SEVERITIES = ['low', 'medium', 'high', 'critical'] as const;
 export type Severity = (typeof SEVERITIES)[number];
 
-export const ALERT_STATUSES = ['open', 'acknowledged', 'resolved'] as const;
+export const ALERT_STATUSES = ['open', 'acknowledged', 'in_progress', 'resolved'] as const;
 export type AlertStatus = (typeof ALERT_STATUSES)[number];
 
 export type ResourceType = 'device' | 'scheduled_class' | 'recording_session';
@@ -39,6 +39,10 @@ export interface Alert {
   resourceId: string;
   institutionId: string | null;
   classroomId: string | null;
+  /** Resolved from the classroom via the organization service (Phase 4 §4). */
+  campusId: string | null;
+  classroomName: string | null;
+  campusName: string | null;
   deviceId: string | null;
   scheduledClassId: string | null;
   recordingSessionId: string | null;
@@ -58,6 +62,56 @@ export interface Alert {
   resolvedBy: string | null;
   resolution: 'auto' | 'manual' | null;
   resolutionNote: string | null;
+  // ---- incident queue (Phase 4 §4) ----
+  assigneeId: string | null;
+  assignedAt: string | null;
+  inProgressAt: string | null;
+  resolutionCode: ResolutionCode | null;
+  /** firstRaisedAt + SLA(severity); recomputed on escalation. */
+  slaDueAt: string;
+}
+
+export const RESOLUTION_CODES = [
+  'hardware_replaced',
+  'network_fixed',
+  'configuration',
+  'false_positive',
+  'class_cancelled',
+  'other',
+] as const;
+export type ResolutionCode = (typeof RESOLUTION_CODES)[number];
+
+/** Time to resolve, by severity (Phase 4 §4). */
+export const SLA_MS: Record<Severity, number> = {
+  critical: 60 * 60_000,
+  high: 4 * 60 * 60_000,
+  medium: 24 * 60 * 60_000,
+  low: 72 * 60 * 60_000,
+};
+
+export const slaDueAt = (firstRaisedAt: string, severity: Severity): string =>
+  new Date(new Date(firstRaisedAt).getTime() + SLA_MS[severity]).toISOString();
+
+/** Breached when resolved after the due time, or still unresolved past it. */
+export const slaBreached = (alert: Pick<Alert, 'slaDueAt' | 'resolvedAt'>, now: Date): boolean =>
+  alert.resolvedAt
+    ? alert.resolvedAt > alert.slaDueAt
+    : now.getTime() > new Date(alert.slaDueAt).getTime();
+
+export interface IncidentComment {
+  id: string;
+  alertId: string;
+  actorId: string;
+  body: string;
+  createdAt: string;
+}
+
+export interface IncidentActivity {
+  alertId: string;
+  at: string;
+  action: string;
+  actorId: string | null;
+  detail: string | null;
 }
 
 /** A detected condition; the engine turns it into a new or updated alert. */

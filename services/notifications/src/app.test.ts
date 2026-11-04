@@ -5,6 +5,16 @@ import { InMemoryAuditClient } from './audit.js';
 import { InMemoryChannel, RecipientDirectory } from './channels.js';
 import type { Alert } from './domain.js';
 
+/** Response bodies used in assertions (typed for lint; fields are a superset). */
+interface Body {
+  error: { code: string; message: string };
+  raised: { id: string }[];
+  updated: unknown[];
+  resolved: unknown[];
+  alert: unknown;
+  deliveries: unknown[];
+}
+
 const INST = '6f1c2e8a-1b2c-4d5e-8f90-1234567890ab';
 const T0 = new Date('2026-11-04T22:00:00.000Z');
 const min = (m: number): string => new Date(T0.getTime() + m * 60_000).toISOString();
@@ -76,7 +86,7 @@ describe('notifications service', () => {
 
   it('health', async () => {
     const res = await ctx.app.inject({ method: 'GET', url: '/health' });
-    expect(res.json()).toEqual({ status: 'ok', service: 'notifications' });
+    expect(res.json<Body>()).toEqual({ status: 'ok', service: 'notifications' });
   });
 
   it('rejects invalid envelopes with a JSON error', async () => {
@@ -86,7 +96,7 @@ describe('notifications service', () => {
       payload: { type: 'x' },
     });
     expect(res.statusCode).toBe(400);
-    expect(res.json().error.code).toBe('validation_error');
+    expect(res.json<Body>().error.code).toBe('validation_error');
   });
 
   it('raises recording_missed after the 5 min grace and auto-resolves on recording.started', async () => {
@@ -107,7 +117,7 @@ describe('notifications service', () => {
       payload: event('recording.started', { deviceId: 'dev-1', scheduledClassId: 'class-A' }),
     });
     expect(ev.statusCode).toBe(202);
-    expect(ev.json().resolved).toHaveLength(1);
+    expect(ev.json<Body>().resolved).toHaveLength(1);
     const [alert] = await list();
     expect(alert).toMatchObject({ status: 'resolved', resolution: 'auto' });
     // once the class has a recording, evaluation does not re-raise
@@ -174,7 +184,10 @@ describe('notifications service', () => {
       url: `/v1/alerts/${alert!.id}/acknowledge`,
       payload: { actorId: 'admin-1', note: 'técnico a caminho' },
     });
-    expect(ack.json().alert).toMatchObject({ status: 'acknowledged', acknowledgedBy: 'admin-1' });
+    expect(ack.json<Body>().alert).toMatchObject({
+      status: 'acknowledged',
+      acknowledgedBy: 'admin-1',
+    });
     await evaluate(min(50), { classWindows: [windowA] });
     expect(ctx.email.sent).toHaveLength(1);
     const res = await ctx.app.inject({
@@ -182,7 +195,7 @@ describe('notifications service', () => {
       url: `/v1/alerts/${alert!.id}/resolve`,
       payload: { actorId: 'admin-1' },
     });
-    expect(res.json().alert).toMatchObject({
+    expect(res.json<Body>().alert).toMatchObject({
       status: 'resolved',
       resolution: 'manual',
       resolvedBy: 'admin-1',
@@ -211,7 +224,7 @@ describe('notifications service', () => {
       payload: { actorId: 'a' },
     });
     expect(res.statusCode).toBe(404);
-    expect(res.json().error.code).toBe('not_found');
+    expect(res.json<Body>().error.code).toBe('not_found');
   });
 
   it('upload.failed raises and recording.uploaded clears failed_upload', async () => {
@@ -222,7 +235,7 @@ describe('notifications service', () => {
       uploadId: 'u-1',
       reason: 'checksum_mismatch',
     });
-    expect(r.json().raised).toHaveLength(1);
+    expect(r.json<Body>().raised).toHaveLength(1);
     const [alert] = await list();
     expect(alert).toMatchObject({
       rule: 'failed_upload',
@@ -234,7 +247,7 @@ describe('notifications service', () => {
       recordingSessionId: 'rs-1',
       scheduledClassId: 'class-A',
     });
-    expect(done.json().resolved).toHaveLength(1);
+    expect(done.json<Body>().resolved).toHaveLength(1);
   });
 
   it('failed_upload overdue 2 h after recordStopAt', async () => {
@@ -258,10 +271,10 @@ describe('notifications service', () => {
           report: { verdict, issues: ['low_snr'] },
         }),
       });
-    expect((await post('poor')).json().raised).toHaveLength(1);
-    expect((await post('unusable')).json().updated).toHaveLength(1);
+    expect((await post('poor')).json<Body>().raised).toHaveLength(1);
+    expect((await post('unusable')).json<Body>().updated).toHaveLength(1);
     expect((await list())[0]).toMatchObject({ rule: 'poor_audio_quality', severity: 'high' });
-    expect((await post('good')).json().resolved).toHaveLength(1);
+    expect((await post('good')).json<Body>().resolved).toHaveLength(1);
   });
 
   it('transcription.failed / completed', async () => {
@@ -271,8 +284,8 @@ describe('notifications service', () => {
         url: '/v1/lifecycle-events',
         payload: event(type, { recordingSessionId: 'rs-3', reason: 'provider timeout' }),
       });
-    expect((await post('transcription.failed')).json().raised).toHaveLength(1);
-    expect((await post('transcription.completed')).json().resolved).toHaveLength(1);
+    expect((await post('transcription.failed')).json<Body>().raised).toHaveLength(1);
+    expect((await post('transcription.completed')).json<Body>().resolved).toHaveLength(1);
   });
 
   it('low_storage below 1 GiB', async () => {
@@ -297,9 +310,12 @@ describe('notifications service', () => {
       payload: { now: min(6), classWindows: [windowA] },
     });
     expect(res.statusCode).toBe(200);
-    const id = res.json().raised[0].id as string;
+    const id = res.json<Body>().raised[0]!.id;
     const detail = await failing.app.inject({ method: 'GET', url: `/v1/alerts/${id}` });
-    expect(detail.json().deliveries[0]).toMatchObject({ status: 'failed', error: 'relay down' });
+    expect(detail.json<Body>().deliveries[0]).toMatchObject({
+      status: 'failed',
+      error: 'relay down',
+    });
   });
 
   it('audit outage is non-fatal', async () => {
@@ -313,7 +329,7 @@ describe('notifications service', () => {
       payload: { now: min(6), classWindows: [windowA] },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json().raised).toHaveLength(1);
+    expect(res.json<Body>().raised).toHaveLength(1);
   });
 
   it('filters alerts by classroom and severity', async () => {

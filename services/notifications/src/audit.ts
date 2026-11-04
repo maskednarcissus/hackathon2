@@ -1,6 +1,16 @@
 /** Audit port — alert lifecycle is part of the recording audit trail (contract §9). */
+/** Alert/incident audit actions (Phase 1 §9 + Phase 4 §4 incident queue). */
+export type AlertAuditAction =
+  | 'alert.raised'
+  | 'alert.escalated'
+  | 'alert.acknowledged'
+  | 'alert.assigned'
+  | 'alert.in_progress'
+  | 'alert.commented'
+  | 'alert.resolved';
+
 export interface AuditRecord {
-  action: 'alert.raised' | 'alert.acknowledged' | 'alert.resolved';
+  action: AlertAuditAction;
   institutionId: string | null;
   actorType: 'system' | 'admin';
   actorId: string | null;
