@@ -1,0 +1,75 @@
+# Held-out cases: written after the heuristic rules were tuned on event-extraction-cases.yaml
+# and NOT used for tuning. Results are reported separately (no thresholds enforced in CI).
+version: "1.0"
+defaults:
+  segment_confidence: 0.92
+test_cases:
+  - id: ho-exam-weekday-with-time
+    input:
+      transcript: "Galera, a P3 fica marcada para terça-feira que vem, às 21h, no laboratório."
+      class_date: "2026-11-04"
+      course: "Redes"
+    expected:
+      events:
+        - type: examination
+          event_date: "2026-11-10"
+          event_time: "21:00"
+  - id: ho-assignment-numeric-year
+    input:
+      transcript: "O prazo para o relatório de estágio é 05/12/2026, sem prorrogação."
+      class_date: "2026-11-04"
+      course: "Estágio Supervisionado"
+    expected:
+      events:
+        - type: assignment
+          event_date: "2026-12-05"
+  - id: ho-cancel-tomorrow
+    input:
+      transcript: "Gente, amanhã não vai ter aula, eu vou estar numa banca."
+      class_date: "2026-11-04"
+      course: "Metodologia Científica"
+    expected:
+      events:
+        - type: class_cancellation
+          event_date: "2026-11-05"
+  - id: ho-hypothetical-supose
+    input:
+      transcript: "Suponha que a prova seja na semana que vem, como vocês organizariam o estudo?"
+      class_date: "2026-11-04"
+      course: "Psicologia da Educação"
+    expected:
+      events: []
+  - id: ho-vague-end-of-semester
+    input:
+      transcript: "O trabalho final fica para o fim do semestre, depois eu passo a data certinha."
+      class_date: "2026-11-04"
+      course: "Urbanismo"
+    expected:
+      events:
+        - type: assignment
+          event_date: null
+  - id: ho-seminar-date-words
+    input:
+      transcript: "As apresentações do seminário vão ser no dia dezoito de novembro."
+      class_date: "2026-11-04"
+      course: "Antropologia"
+    expected:
+      events:
+        - type: presentation
+          event_date: "2026-11-18"
+  - id: ho-chatter-grades
+    input:
+      transcript: "As notas da prova já estão no sistema, quem quiser revisar me procura."
+      class_date: "2026-11-04"
+      course: "Geometria Analítica"
+    expected:
+      events: []
+  - id: ho-reading-for-friday
+    input:
+      transcript: "Para sexta, leiam o texto do Bourdieu que está na pasta da disciplina."
+      class_date: "2026-11-04"
+      course: "Sociologia II"
+    expected:
+      events:
+        - type: reading_deadline
+          event_date: "2026-11-06"

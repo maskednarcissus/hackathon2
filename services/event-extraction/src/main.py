@@ -1,15 +1,11 @@
-"""Classroom Intelligence — Event Extraction Service."""
+"""Classroom Intelligence — Event Extraction Service (uvicorn entrypoint, port 8007)."""
 
-from fastapi import FastAPI
+from event_extraction.app import create_app
+from event_extraction.config import dependencies_from_env
 
-app = FastAPI(
-    title="CI Event Extraction Service",
-    description="Extracts academic events (exams, deadlines, class changes) from transcripts using LLMs with structured output. Performs date resolution, confidence scoring, and deduplication.",
-    version="0.1.0",
-)
+app = create_app(dependencies_from_env())
 
+if __name__ == "__main__":
+    import uvicorn
 
-@app.get("/health")
-async def health() -> dict[str, str]:
-    """Service health check."""
-    return {"status": "ok", "service": "event-extraction"}
+    uvicorn.run(app, host="0.0.0.0", port=8007)
