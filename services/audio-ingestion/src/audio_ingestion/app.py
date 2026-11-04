@@ -1,14 +1,17 @@
 """FastAPI application factory for the audio ingestion service."""
 
-from typing import Annotated
+from datetime import datetime
+from typing import Annotated, Literal
 
-from fastapi import Depends, FastAPI, Header, Request, Response, status
+from fastapi import Depends, FastAPI, Header, Query, Request, Response, status
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
 from audio_ingestion import __version__
 from audio_ingestion.auth import device_authenticator
 from audio_ingestion.config import Dependencies, dependencies_from_env
+from audio_ingestion.internal import internal_token_guard
 from audio_ingestion.models import (
     MAX_CHUNK_SIZE,
     RecordingEventIn,
@@ -17,8 +20,19 @@ from audio_ingestion.models import (
     UploadCreateIn,
     UploadOut,
 )
-from audio_ingestion.ports import DeviceIdentity
+from audio_ingestion.ports import DeviceIdentity, UnknownReferenceError
 from audio_ingestion.service import IngestionError, IngestionService
+
+
+class RetentionDeleteIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    ids: list[str] = Field(max_length=10_000)
+    kind: str
+    job_id: str | None = Field(default=None, alias="jobId")
+
+
+RETENTION_KIND = "audio"
 
 
 def create_app(deps: Dependencies | None = None) -> FastAPI:
@@ -52,6 +66,14 @@ def create_app(deps: Dependencies | None = None) -> FastAPI:
             status_code=exc.status_code,
             content={"error": exc.code, "message": exc.message, **exc.details},
         )
+
+    @app.exception_handler(UnknownReferenceError)
+    async def _unknown_reference(_: Request, exc: UnknownReferenceError) -> JSONResponse:
+        return JSONResponse(
+            status_code=422, content={"error": "unknown_reference", "message": str(exc)}
+        )
+
+    internal = [Depends(internal_token_guard(deps.internal_token))]
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -110,5 +132,26 @@ def create_app(deps: Dependencies | None = None) -> FastAPI:
     async def complete_upload(upload_id: str, device: Device) -> UploadOut:
         upload, recording = await run_in_threadpool(service.complete_upload, device, upload_id)
         return UploadOut.from_session(upload, storage_uri=recording.storage_uri)
+
+    # ------------------------------------- retention data owner (Phase 4 §5, kind audio)
+    @app.get("/internal/v1/retention/candidates", dependencies=internal)
+    async def retention_candidates(
+        institution_id: Annotated[str, Query(alias="institutionId")],
+        older_than: Annotated[datetime, Query(alias="olderThan")],
+        kind: Literal["audio", "transcript", "summary", "extracted_event"] = "audio",
+    ) -> dict[str, list[dict[str, object]]]:
+        if kind != RETENTION_KIND:
+            return {"candidates": []}
+        if older_than.tzinfo is None:
+            raise IngestionError(422, "invalid_older_than", "olderThan must include an offset")
+        items = await run_in_threadpool(service.retention_candidates, institution_id, older_than)
+        return {"candidates": [item.to_json() for item in items]}
+
+    @app.post("/internal/v1/retention/delete", dependencies=internal)
+    async def retention_delete(body: RetentionDeleteIn) -> dict[str, list[str]]:
+        if body.kind != RETENTION_KIND:
+            return {"deletedIds": []}
+        deleted = await run_in_threadpool(service.delete_audio, body.ids, body.job_id)
+        return {"deletedIds": deleted}
 
     return app

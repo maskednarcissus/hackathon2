@@ -23,11 +23,14 @@ from audio_ingestion.models import (
 from audio_ingestion.ports import (
     AuditClient,
     AuditRecord,
+    ConcurrentUpdateError,
     DeviceIdentity,
     EventEnvelope,
     EventPublisher,
     ObjectStore,
     RecordingRepository,
+    RetentionCandidate,
+    UnknownReferenceError,
     UploadRepository,
 )
 
@@ -81,10 +84,16 @@ class IngestionService:
         staging_dir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------ helpers
-    def _emit(self, event_type: str, institution_id: str | None, data: dict[str, Any]) -> None:
+    def _emit(
+        self,
+        event_type: str,
+        institution_id: str | None,
+        data: dict[str, Any],
+        event_id: str | None = None,
+    ) -> None:
         self._publisher.publish(
             EventEnvelope(
-                event_id=str(uuid.uuid4()),
+                event_id=event_id or str(uuid.uuid4()),
                 type=event_type,
                 version=1,
                 occurred_at=self._clock(),
@@ -181,7 +190,16 @@ class IngestionService:
             local_recording_id=body.local_recording_id,
             created_at=self._clock(),
         )
-        self._recordings.add(recording)
+        try:
+            self._recordings.add(recording)
+        except ConcurrentUpdateError:
+            # Same (deviceId, localRecordingId) registered by a parallel retry.
+            existing = self._recordings.find_by_local_id(device.device_id, body.local_recording_id)
+            if existing is None:
+                raise
+            return existing, False
+        except UnknownReferenceError as exc:
+            raise IngestionError(422, "unknown_reference", str(exc)) from exc
         self._audit_device(
             "recording.metadata_received",
             device,
@@ -198,6 +216,8 @@ class IngestionService:
         return self._owned_recording(device, recording_id)
 
     def report_recording_event(self, device: DeviceIdentity, body: RecordingEventIn) -> None:
+        if body.device_id is not None and str(body.device_id) != device.device_id:
+            raise IngestionError(403, "device_mismatch", "deviceId does not match the signer")
         data = {
             "deviceId": device.device_id,
             "localRecordingId": body.local_recording_id,
@@ -207,7 +227,14 @@ class IngestionService:
         if body.reason:
             data["reason"] = body.reason
         self._audit_device(body.type, device, "device", device.device_id, **data)
-        self._emit(body.type, device.institution_id, {**data, "classroomId": device.classroom_id})
+        # Deterministic id: a firmware retry of the same report is deduplicated downstream.
+        event_id = _event_id(body.type, device.device_id, body.local_recording_id)
+        self._emit(
+            body.type,
+            device.institution_id,
+            {**data, "classroomId": device.classroom_id},
+            event_id=event_id,
+        )
 
     # ------------------------------------------------------------ 1.5 uploads
     def create_upload(
@@ -215,6 +242,8 @@ class IngestionService:
     ) -> tuple[UploadSession, bool]:
         """Start an upload, or return the open one for the same recording (resume)."""
         recording = self._owned_recording(device, str(body.recording_session_id))
+        if recording.audio_deleted_at is not None:
+            raise IngestionError(410, "audio_deleted", "recording audio was deleted by retention")
         if body.total_size_bytes != recording.file_size_bytes:
             raise IngestionError(
                 422, "size_mismatch", "totalSizeBytes differs from the recording metadata"
@@ -238,9 +267,17 @@ class IngestionService:
             checksum_sha256=body.checksum_sha256,
             chunk_size_bytes=body.chunk_size_bytes,
             total_chunks=total_chunks,
+            status="uploading",
             created_at=self._clock(),
         )
-        self._uploads.add(upload)
+        try:
+            self._uploads.add(upload)
+        except ConcurrentUpdateError:
+            # A parallel request opened an upload for this recording first: resume it.
+            existing = self._uploads.find_open_for_recording(recording.id)
+            if existing is None:
+                raise
+            return existing, False
         recording.upload_status = "uploading"
         self._recordings.update(recording)
         self._audit_device(
@@ -279,24 +316,30 @@ class IngestionService:
         if actual_sha != claimed_sha.lower():
             raise IngestionError(422, "chunk_checksum_mismatch", "X-Chunk-SHA256 does not match")
 
-        stored = upload.chunk_checksums.get(index)
-        if stored is not None:
+        def conflict_or_duplicate(stored: str) -> bool:
             if stored == actual_sha:
                 return False
             raise IngestionError(
                 409, "chunk_conflict", f"chunk {index} was already received with other content"
             )
 
+        stored = upload.chunk_checksums.get(index)
+        if stored is not None:
+            return conflict_or_duplicate(stored)
+
         chunk_dir = self._chunk_dir(upload.upload_id)
         chunk_dir.mkdir(parents=True, exist_ok=True)
         part = chunk_dir / f"{index:06d}.part"
-        tmp = part.with_suffix(".tmp")
+        tmp = chunk_dir / f"{index:06d}.{uuid.uuid4().hex}.tmp"
         tmp.write_bytes(data)
-        tmp.replace(part)
-
-        upload.chunk_checksums[index] = actual_sha
-        upload.status = "uploading"
-        self._uploads.update(upload)
+        try:
+            # The (upload, index) primary key arbitrates concurrent senders of the same chunk.
+            stored = self._uploads.add_chunk(upload.upload_id, index, actual_sha, len(data))
+            if stored is not None:
+                return conflict_or_duplicate(stored)
+            tmp.replace(part)
+        finally:
+            tmp.unlink(missing_ok=True)
         return True
 
     def _fail_upload(
@@ -309,9 +352,8 @@ class IngestionService:
     ) -> IngestionError:
         upload.status = "failed"
         upload.failure_reason = reason
-        self._uploads.update(upload)
         recording.upload_status = "failed"
-        self._recordings.update(recording)
+        self._uploads.fail(upload, recording)
         shutil.rmtree(self._chunk_dir(upload.upload_id), ignore_errors=True)
         self._audit_device(
             "upload.failed",
@@ -331,8 +373,35 @@ class IngestionService:
                 "classroomId": recording.classroom_id,
                 "reason": reason,
             },
+            event_id=_event_id("upload.failed", upload.upload_id),
         )
         return IngestionError(422, code, reason)
+
+    def _publish_uploaded(self, recording: RecordingSession, upload: UploadSession) -> None:
+        assert recording.storage_uri is not None
+        self._emit(
+            "recording.uploaded",
+            recording.institution_id,
+            {
+                "recordingSessionId": recording.id,
+                "deviceId": recording.device_id,
+                "classroomId": recording.classroom_id,
+                "scheduledClassId": recording.scheduled_class_id,
+                "storageUri": recording.storage_uri,
+                "sizeBytes": upload.total_size_bytes,
+                "checksumSha256": upload.checksum_sha256,
+                "sampleRate": recording.sample_rate,
+                "channels": recording.channels,
+                "durationMs": recording.duration_ms,
+                "audioFormat": recording.audio_format,
+                "startedAt": recording.started_at.isoformat(),
+                "endedAt": recording.ended_at.isoformat(),
+                "institutionId": recording.institution_id,
+            },
+            # One recording is uploaded once: a re-published event keeps its id, so
+            # subscribers deduplicate it (processed_events) instead of re-processing.
+            event_id=_event_id("recording.uploaded", recording.id),
+        )
 
     def complete_upload(
         self, device: DeviceIdentity, upload_id: str
@@ -340,6 +409,10 @@ class IngestionService:
         upload = self._owned_upload(device, upload_id)
         recording = self._owned_recording(device, upload.recording_session_id)
         if upload.status == "complete":
+            # Retried completion (e.g. the first response was lost, or publishing failed
+            # after the commit): re-publish with the same event id so nothing is lost.
+            if recording.storage_uri and recording.audio_deleted_at is None:
+                self._publish_uploaded(recording, upload)
             return upload, recording
         if upload.status == "failed":
             raise IngestionError(409, "upload_closed", "upload has failed; start a new upload")
@@ -358,6 +431,13 @@ class IngestionService:
             with open(fd, "wb") as out:
                 for index in range(upload.total_chunks):
                     part = chunk_dir / f"{index:06d}.part"
+                    if not part.exists():
+                        raise IngestionError(
+                            409,
+                            "chunks_missing",
+                            "chunk data is not available on this instance; re-send it",
+                            missingChunks=[index],
+                        )
                     with part.open("rb") as src:
                         while block := src.read(1024 * 1024):
                             digest.update(block)
@@ -387,13 +467,17 @@ class IngestionService:
         finally:
             assembled.unlink(missing_ok=True)
 
-        shutil.rmtree(chunk_dir, ignore_errors=True)
         upload.status = "complete"
         upload.completed_at = self._clock()
-        self._uploads.update(upload)
         recording.upload_status = "complete"
         recording.storage_uri = storage_uri
-        self._recordings.update(recording)
+        if not self._uploads.finalize(upload, recording):
+            # Lost a race with a concurrent completion of the same upload.
+            current = self._owned_upload(device, upload_id)
+            if current.status != "complete":
+                raise IngestionError(409, "upload_closed", f"upload is {current.status}")
+            return current, self._owned_recording(device, recording.id)
+        shutil.rmtree(chunk_dir, ignore_errors=True)
 
         self._audit_device(
             "upload.completed",
@@ -405,23 +489,57 @@ class IngestionService:
             sizeBytes=size,
             checksumSha256=upload.checksum_sha256,
         )
-        self._emit(
-            "recording.uploaded",
-            recording.institution_id,
-            {
-                "recordingSessionId": recording.id,
-                "deviceId": recording.device_id,
-                "classroomId": recording.classroom_id,
-                "scheduledClassId": recording.scheduled_class_id,
-                "storageUri": storage_uri,
-                "sizeBytes": size,
-                "checksumSha256": upload.checksum_sha256,
-                "sampleRate": recording.sample_rate,
-                "channels": recording.channels,
-                "durationMs": recording.duration_ms,
-                "audioFormat": recording.audio_format,
-                "startedAt": recording.started_at.isoformat(),
-            },
-        )
+        self._publish_uploaded(recording, upload)
         log.info("upload.completed", recording_session_id=recording.id, size=size)
         return upload, recording
+
+    # ------------------------------------------- retention (Phase 4 §5, kind "audio")
+    def retention_candidates(
+        self, institution_id: str, older_than: datetime
+    ) -> list[RetentionCandidate]:
+        return self._recordings.retention_candidates(institution_id, older_than)
+
+    def delete_audio(self, ids: list[str], job_id: str | None) -> list[str]:
+        """Delete stored audio (recording + derived segments) and its upload/segment rows.
+
+        Objects are deleted before rows are marked, so a failure leaves the item a
+        candidate for the next run instead of orphaning objects. Ids whose audio is
+        already gone are reported as deleted (idempotent retries).
+        """
+        deleted: list[str] = []
+        for recording_id in dict.fromkeys(ids):
+            recording = self._recordings.get(recording_id)
+            if recording is None:
+                continue
+            if recording.storage_uri:
+                self._store.delete(recording.storage_uri)
+                self._store.delete_prefix(segment_uri_prefix(recording.storage_uri))
+            if recording.audio_deleted_at is None:
+                self._recordings.delete_audio(recording_id, self._clock())
+                self._audit.record(
+                    AuditRecord(
+                        action="retention.deleted",
+                        resource_type="recording_session",
+                        resource_id=recording_id,
+                        actor_type="system",
+                        actor_id=None,
+                        institution_id=recording.institution_id,
+                        occurred_at=self._clock(),
+                        metadata={"kind": "audio", "jobId": job_id, "service": SERVICE_NAME},
+                    )
+                )
+            deleted.append(recording_id)
+        return deleted
+
+
+EVENT_ID_NAMESPACE = uuid.UUID("6f1c3d1e-9a52-4f4e-8a8e-2b0f1d7c5a10")
+
+
+def _event_id(*parts: str) -> str:
+    return str(uuid.uuid5(EVENT_ID_NAMESPACE, ":".join(parts)))
+
+
+def segment_uri_prefix(storage_uri: str) -> str:
+    """``…/{id}.wav`` → ``…/{id}/segments/`` (written by audio-processing)."""
+    base = storage_uri.rsplit(".", 1)[0] if "." in storage_uri.rsplit("/", 1)[-1] else storage_uri
+    return f"{base}/segments/"

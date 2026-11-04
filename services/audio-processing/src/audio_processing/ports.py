@@ -5,7 +5,31 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    from audio_processing.results import PipelineResult
+
+
+class UnknownRecordingError(ValueError):
+    """The recording session referenced by an event does not exist."""
+
+
+class ProcessingRepository(Protocol):
+    """Processing results and idempotent consumption (``processed_events``)."""
+
+    def is_processed(self, event_id: str) -> bool: ...
+
+    def load_result(self, recording_session_id: str) -> PipelineResult | None:
+        """Latest stored result for the recording (status ``segmented``/``stopped_unusable``)."""
+        ...
+
+    def save(self, event_id: str, result: PipelineResult) -> bool:
+        """Atomically store the result and mark ``event_id`` processed.
+
+        Returns ``False`` (storing nothing) when the event was already processed.
+        """
+        ...
 
 
 class ObjectStore(Protocol):

@@ -138,6 +138,23 @@ class EncryptedLocalObjectStore:
     def exists(self, uri: str) -> bool:
         return self._path_for(self._key_from_uri(uri)).exists()
 
+    def delete(self, uri: str) -> bool:
+        path = self._path_for(self._key_from_uri(uri))
+        if not path.exists():
+            return False
+        path.unlink()
+        return True
+
+    def delete_prefix(self, uri_prefix: str) -> int:
+        prefix = self._key_from_uri(uri_prefix)
+        root = self._root.resolve()
+        count = 0
+        for path in sorted(root.rglob("*")):
+            if path.is_file() and path.relative_to(root).as_posix().startswith(prefix):
+                path.unlink()
+                count += 1
+        return count
+
     def raw_path(self, uri: str) -> Path:
         """Filesystem path of the encrypted object (diagnostics / tests)."""
         return self._path_for(self._key_from_uri(uri))

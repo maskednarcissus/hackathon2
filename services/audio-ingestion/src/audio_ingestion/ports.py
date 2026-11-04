@@ -15,6 +15,37 @@ from typing import Any, Protocol
 from audio_ingestion.models import RecordingSession, UploadSession
 
 
+class UnknownReferenceError(ValueError):
+    """A referenced entity (device, classroom, scheduled class…) does not exist."""
+
+
+class ConcurrentUpdateError(Exception):
+    """A uniqueness invariant was violated by a concurrent request (e.g. two open uploads)."""
+
+
+@dataclass(frozen=True)
+class RetentionCandidate:
+    """Item format of organization's retention contract (Phase 4 §5)."""
+
+    id: str
+    created_at: datetime
+    recording_session_id: str
+    class_section_id: str | None = None
+    recording_policy_id: str | None = None
+
+    def to_json(self) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "id": self.id,
+            "createdAt": self.created_at.isoformat().replace("+00:00", "Z"),
+            "recordingSessionId": self.recording_session_id,
+        }
+        if self.class_section_id:
+            body["classSectionId"] = self.class_section_id
+        if self.recording_policy_id:
+            body["recordingPolicyId"] = self.recording_policy_id
+        return body
+
+
 @dataclass(frozen=True)
 class DeviceIdentity:
     """What device-management tells us about a device (contract §3)."""
@@ -43,6 +74,20 @@ class RecordingRepository(Protocol):
 
     def update(self, recording: RecordingSession) -> None: ...
 
+    def retention_candidates(
+        self, institution_id: str, older_than: datetime
+    ) -> list[RetentionCandidate]:
+        """Recordings of the institution whose stored audio was created before ``older_than``."""
+        ...
+
+    def delete_audio(self, recording_id: str, deleted_at: datetime) -> RecordingSession | None:
+        """Mark the audio of a recording deleted and drop its upload/segment rows.
+
+        Returns the recording as it was *before* deletion (so the caller can delete the stored
+        objects), or ``None`` when the recording does not exist.
+        """
+        ...
+
 
 class UploadRepository(Protocol):
     def add(self, upload: UploadSession) -> None: ...
@@ -57,6 +102,26 @@ class UploadRepository(Protocol):
 
     def update(self, upload: UploadSession) -> None: ...
 
+    def add_chunk(self, upload_id: str, index: int, checksum_sha256: str, size: int) -> str | None:
+        """Record a received chunk (idempotent on ``(upload_id, index)``).
+
+        Returns ``None`` when the chunk was newly recorded, otherwise the checksum that was
+        already stored for that index. Moves a ``pending`` upload to ``uploading``.
+        """
+        ...
+
+    def finalize(self, upload: UploadSession, recording: RecordingSession) -> bool:
+        """Atomically mark the upload ``complete`` and update the recording.
+
+        Returns ``False`` (and changes nothing) when the upload is no longer open — another
+        request completed or failed it first.
+        """
+        ...
+
+    def fail(self, upload: UploadSession, recording: RecordingSession) -> None:
+        """Atomically mark the upload and the recording ``failed``."""
+        ...
+
 
 class ObjectStore(Protocol):
     """Durable, encrypted-at-rest object storage for audio."""
@@ -70,6 +135,14 @@ class ObjectStore(Protocol):
         ...
 
     def exists(self, uri: str) -> bool: ...
+
+    def delete(self, uri: str) -> bool:
+        """Delete one object; ``False`` when it did not exist."""
+        ...
+
+    def delete_prefix(self, uri_prefix: str) -> int:
+        """Delete every object whose URI starts with ``uri_prefix``; returns the count."""
+        ...
 
 
 @dataclass

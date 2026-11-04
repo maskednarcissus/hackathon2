@@ -16,8 +16,15 @@ log = structlog.get_logger(__name__)
 class HttpDeviceKeyResolver:
     """Resolves device keys via ``GET /internal/v1/devices/{id}/public-key`` (contract §3)."""
 
-    def __init__(self, base_url: str, cache_ttl_seconds: float = 60.0, timeout: float = 5.0):
+    def __init__(
+        self,
+        base_url: str,
+        internal_token: str | None = None,
+        cache_ttl_seconds: float = 60.0,
+        timeout: float = 5.0,
+    ):
         self._base_url = base_url.rstrip("/")
+        self._headers = {"x-internal-token": internal_token} if internal_token else {}
         self._ttl = cache_ttl_seconds
         self._timeout = timeout
         self._cache: dict[str, tuple[float, DeviceIdentity | None]] = {}
@@ -28,7 +35,7 @@ class HttpDeviceKeyResolver:
             return cached[1]
         url = f"{self._base_url}/internal/v1/devices/{device_id}/public-key"
         async with httpx.AsyncClient(timeout=self._timeout) as client:
-            response = await client.get(url)
+            response = await client.get(url, headers=self._headers)
         identity: DeviceIdentity | None
         if response.status_code == httpx.codes.NOT_FOUND:
             identity = None
@@ -54,9 +61,12 @@ class HttpAuditClient:
     should prefer the Pub/Sub ``audit-events`` topic for guaranteed delivery.
     """
 
-    def __init__(self, base_url: str, timeout: float = 3.0) -> None:
+    def __init__(
+        self, base_url: str, internal_token: str | None = None, timeout: float = 3.0
+    ) -> None:
         self._url = base_url.rstrip("/") + "/v1/audit-events"
         self._timeout = timeout
+        self._headers = {"x-internal-token": internal_token} if internal_token else {}
 
     def record(self, record: AuditRecord) -> None:
         payload = {
@@ -70,6 +80,8 @@ class HttpAuditClient:
             "occurredAt": record.occurred_at.isoformat(),
         }
         try:
-            httpx.post(self._url, json=payload, timeout=self._timeout).raise_for_status()
+            httpx.post(
+                self._url, json=payload, headers=self._headers, timeout=self._timeout
+            ).raise_for_status()
         except httpx.HTTPError as exc:
             log.warning("audit.delivery_failed", action=record.action, error=str(exc))

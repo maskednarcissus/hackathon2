@@ -25,6 +25,8 @@ class Segment(BaseModel):
     start_ms: int
     end_ms: int
     storage_uri: str | None = None
+    size_bytes: int | None = None
+    checksum_sha256: str | None = None
 
 
 @dataclass(frozen=True)

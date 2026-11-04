@@ -16,7 +16,7 @@ MAX_CHANNELS = 8
 
 DEFAULT_CHUNK_SIZE = 4 * 1024 * 1024
 MAX_CHUNK_SIZE = 16 * 1024 * 1024
-MIN_CHUNK_SIZE = 1024
+MIN_CHUNK_SIZE = 64 * 1024  # matches upload_sessions CHECK constraint
 
 SHA256_PATTERN = r"^[0-9a-f]{64}$"
 
@@ -98,6 +98,8 @@ class RecordingSession(CamelModel):
     local_recording_id: str
     upload_status: UploadStatus = "pending"
     storage_uri: str | None = None
+    recording_policy_id: str | None = None
+    audio_deleted_at: datetime | None = None
     created_at: datetime
 
 
@@ -163,6 +165,8 @@ class RecordingEventIn(CamelModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
 
     type: Literal["recording.started", "recording.stopped"]
+    # Sent by the firmware; optional, but when present it must match the signing device.
+    device_id: UUID | None = None
     local_recording_id: str = Field(min_length=1, max_length=128)
     scheduled_class_id: UUID | None = None
     at: datetime

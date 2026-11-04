@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 import structlog
 
 from audio_processing.ports import AuditRecord, EventEnvelope
+from audio_processing.results import PipelineResult
 
 log = structlog.get_logger(__name__)
 
@@ -67,3 +69,25 @@ class InMemoryAuditClient:
 
     def actions(self) -> list[str]:
         return [r.action for r in self.records]
+
+
+class InMemoryProcessingRepository:
+    def __init__(self) -> None:
+        self._processed: set[str] = set()
+        self._results: dict[str, PipelineResult] = {}
+        self._lock = threading.Lock()
+
+    def is_processed(self, event_id: str) -> bool:
+        return event_id in self._processed
+
+    def load_result(self, recording_session_id: str) -> PipelineResult | None:
+        result = self._results.get(recording_session_id)
+        return result.model_copy(deep=True) if result else None
+
+    def save(self, event_id: str, result: PipelineResult) -> bool:
+        with self._lock:
+            if event_id in self._processed:
+                return False
+            self._processed.add(event_id)
+            self._results[result.recording_session_id] = result.model_copy(deep=True)
+        return True

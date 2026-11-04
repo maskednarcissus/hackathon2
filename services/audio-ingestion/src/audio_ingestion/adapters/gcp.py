@@ -46,9 +46,31 @@ class GcsObjectStore:
     def exists(self, uri: str) -> bool:
         return bool(self._blob_for(uri).exists())
 
+    def delete(self, uri: str) -> bool:
+        from google.api_core.exceptions import NotFound
+
+        try:
+            self._blob_for(uri).delete()
+        except NotFound:
+            return False
+        return True
+
+    def delete_prefix(self, uri_prefix: str) -> int:
+        prefix = f"gs://{self._bucket_name}/"
+        if not uri_prefix.startswith(prefix):
+            raise ValueError(f"URI {uri_prefix} is not in bucket {self._bucket_name}")
+        count = 0
+        for blob in self._client.list_blobs(self._bucket_name, prefix=uri_prefix[len(prefix) :]):
+            blob.delete()
+            count += 1
+        return count
+
 
 class PubSubEventPublisher:
-    """Publishes each event to the Pub/Sub topic named after the event type (contract §6)."""
+    """Publishes each event to the Pub/Sub topic named after the event type (contract §6).
+
+    Selected when ``PUBSUB_PROJECT_ID`` is set (integration stage §2).
+    """
 
     def __init__(self, project_id: str) -> None:
         from google.cloud import pubsub_v1

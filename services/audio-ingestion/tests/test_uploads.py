@@ -46,6 +46,9 @@ def test_full_chunked_upload_stores_encrypted_and_publishes(
     assert data["storageUri"] == uri
     assert data["checksumSha256"] == hashlib.sha256(audio).hexdigest()
     assert data["durationMs"] == 90 * 60 * 1000
+    assert data["startedAt"] == "2026-11-04T19:00:00+00:00"
+    assert data["endedAt"] == "2026-11-04T20:30:00+00:00"
+    assert data["institutionId"] == institution
     envelope = events[0].to_json()
     assert envelope["version"] == 1 and envelope["source"] == "audio-ingestion"
 

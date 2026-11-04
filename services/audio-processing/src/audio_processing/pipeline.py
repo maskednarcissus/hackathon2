@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import os
 import tempfile
-import threading
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -14,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import structlog
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 from pydantic.alias_generators import to_camel
 
 from audio_processing.ports import (
@@ -23,14 +22,32 @@ from audio_processing.ports import (
     EventEnvelope,
     EventPublisher,
     ObjectStore,
+    ProcessingRepository,
+    UnknownRecordingError,
 )
 from audio_processing.quality import QualityReport, assess
+from audio_processing.results import PipelineResult, SegmentationResult
 from audio_processing.segmentation import Segment, SegmentationConfig, plan_segments
 from audio_processing.wav import analyze_wav, write_wav_range
 
 log = structlog.get_logger(__name__)
 
 SERVICE_NAME = "audio-processing"
+CONSUMER = SERVICE_NAME  # processed_events.consumer
+EVENT_ID_NAMESPACE = uuid.UUID("0b7f6a52-3c1e-4d7b-9a61-5f2d8c4e9b13")
+
+
+def _iso(value: datetime | None) -> str | None:
+    return value.isoformat().replace("+00:00", "Z") if value else None
+
+
+def derived_event_id(consumed_event_id: str, event_type: str) -> str:
+    """Id of an event emitted while handling ``consumed_event_id``.
+
+    Deterministic, so a redelivered input re-publishes identical ids that subscribers
+    deduplicate.
+    """
+    return str(uuid.uuid5(EVENT_ID_NAMESPACE, f"{consumed_event_id}:{event_type}"))
 
 
 class ProcessingError(Exception):
@@ -59,28 +76,20 @@ class RecordingUploadedData(_Camel):
     channels: int
     duration_ms: int
     audio_format: str = "wav_pcm_s16le"
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    institution_id: str | None = None
+    class_section_id: str | None = None
 
 
 class RecordingUploadedEvent(_Camel):
-    event_id: str
+    event_id: uuid.UUID
     type: str
     version: int = 1
     occurred_at: datetime
     source: str
     institution_id: str | None = None
     data: RecordingUploadedData
-
-
-class PipelineResult(_Camel):
-    recording_session_id: str
-    status: str  # "segmented" | "stopped_unusable" | "duplicate"
-    report: QualityReport
-    segments: list[Segment] = Field(default_factory=list)
-
-
-class SegmentationResult(_Camel):
-    duration_ms: int
-    segments: list[Segment]
 
 
 def segment_key_prefix(store: ObjectStore, source_uri: str) -> str:
@@ -97,18 +106,19 @@ class ProcessingService:
     audit: AuditClient
     work_dir: Path
     segmentation: SegmentationConfig
+    repository: ProcessingRepository
     clock: Callable[[], datetime] = lambda: datetime.now(UTC)
 
     def __post_init__(self) -> None:
         self.work_dir.mkdir(parents=True, exist_ok=True)
-        self._processed: dict[str, PipelineResult] = {}
-        self._lock = threading.Lock()
 
     # ------------------------------------------------------------- helpers
-    def _emit(self, event_type: str, institution_id: str | None, data: dict[str, Any]) -> None:
+    def _emit(
+        self, event_type: str, institution_id: str | None, data: dict[str, Any], event_id: str
+    ) -> None:
         self.publisher.publish(
             EventEnvelope(
-                event_id=str(uuid.uuid4()),
+                event_id=event_id,
                 type=event_type,
                 version=1,
                 occurred_at=self.clock(),
@@ -165,6 +175,9 @@ class ProcessingService:
             out = self.temp_path(".wav")
             try:
                 write_wav_range(path, out, segment.start_ms, segment.end_ms)
+                data = out.read_bytes()
+                segment.size_bytes = len(data)
+                segment.checksum_sha256 = hashlib.sha256(data).hexdigest()
                 segment.storage_uri = self.store.put_file(
                     f"{key_prefix}/{segment.index:04d}.wav", out, "audio/wav"
                 )
@@ -186,14 +199,28 @@ class ProcessingService:
             )
         return event
 
+    def _duplicate(self, recording_id: str) -> PipelineResult:
+        previous = self.repository.load_result(recording_id)
+        if previous is None:
+            return PipelineResult(
+                recording_session_id=recording_id, status="duplicate", report=None
+            )
+        return previous.model_copy(update={"status": "duplicate"})
+
     def handle_recording_uploaded(self, payload: dict[str, Any]) -> PipelineResult:
+        """Process one ``recording.uploaded`` event, idempotently by ``eventId``.
+
+        Order matters for at-least-once delivery: outputs are written and published
+        (with ids derived from the consumed event id) *before* the event is recorded as
+        processed, so a crash or publish failure leads to a redelivery that completes the
+        work instead of silently dropping it.
+        """
         event = self.parse_event(payload)
+        event_id = str(event.event_id)
         data = event.data
-        tenant = event.institution_id
-        with self._lock:
-            previous = self._processed.get(data.recording_session_id)
-        if previous is not None:
-            return previous.model_copy(update={"status": "duplicate"})
+        tenant = event.institution_id or data.institution_id
+        if self.repository.is_processed(event_id):
+            return self._duplicate(data.recording_session_id)
 
         local = self.temp_path(".wav")
         try:
@@ -225,6 +252,7 @@ class ProcessingService:
                 "audio.quality_assessed",
                 tenant,
                 {**context, "report": report.model_dump(by_alias=True)},
+                derived_event_id(event_id, "audio.quality_assessed"),
             )
             stopped = report.verdict == "unusable"
             self._audit(
@@ -272,8 +300,19 @@ class ProcessingService:
                         "channels": analysis.info.channels,
                         "durationMs": analysis.info.duration_ms,
                         "qualityVerdict": report.verdict,
+                        # Recording window + tenant, carried from recording.uploaded so
+                        # transcription can resolve the class section (class identification).
+                        "startedAt": _iso(data.started_at),
+                        "endedAt": _iso(data.ended_at),
+                        "institutionId": tenant,
+                        **(
+                            {"classSectionId": data.class_section_id}
+                            if data.class_section_id
+                            else {}
+                        ),
                         "segments": segment_payload,
                     },
+                    derived_event_id(event_id, "recording.segmented"),
                 )
                 self._audit(
                     "audio.segmented",
@@ -290,6 +329,11 @@ class ProcessingService:
         finally:
             local.unlink(missing_ok=True)
 
-        with self._lock:
-            self._processed[data.recording_session_id] = result
+        try:
+            recorded = self.repository.save(event_id, result)
+        except UnknownRecordingError as exc:
+            raise ProcessingError(422, "unknown_recording", str(exc)) from exc
+        if not recorded:
+            # A concurrent delivery of the same event finished first.
+            return self._duplicate(data.recording_session_id)
         return result

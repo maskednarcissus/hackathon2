@@ -7,19 +7,16 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Query, Request
+from fastapi import Depends, FastAPI, Query, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from audio_processing import __version__
 from audio_processing.config import Dependencies, dependencies_from_env
-from audio_processing.pipeline import (
-    PipelineResult,
-    ProcessingError,
-    ProcessingService,
-    SegmentationResult,
-)
+from audio_processing.internal import internal_token_guard
+from audio_processing.pipeline import ProcessingError, ProcessingService
 from audio_processing.quality import QualityReport
+from audio_processing.results import PipelineResult, SegmentationResult
 from audio_processing.segmentation import SegmentationConfig
 from audio_processing.wav import WavFormatError
 
@@ -48,6 +45,7 @@ def create_app(deps: Dependencies | None = None) -> FastAPI:
         audit=deps.audit,
         work_dir=deps.work_dir,
         segmentation=deps.segmentation,
+        repository=deps.repository,
     )
     app = FastAPI(
         title="CI Audio Processing Service",
@@ -126,7 +124,11 @@ def create_app(deps: Dependencies | None = None) -> FastAPI:
         finally:
             path.unlink(missing_ok=True)
 
-    @app.post("/v1/events/recording-uploaded", response_model=PipelineResult)
+    @app.post(
+        "/v1/events/recording-uploaded",
+        response_model=PipelineResult,
+        dependencies=[Depends(internal_token_guard(deps.internal_token))],
+    )
     async def recording_uploaded(payload: dict[str, Any]) -> PipelineResult:
         """Push endpoint for the `recording.uploaded` subscription (raw or Pub/Sub push)."""
         return await run_in_threadpool(service.handle_recording_uploaded, _unwrap_push(payload))

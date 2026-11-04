@@ -19,11 +19,11 @@ from audio_processing.adapters.local_store import EncryptedLocalObjectStore
 from audio_processing.adapters.memory import (
     InMemoryAuditClient,
     InMemoryEventPublisher,
-    InMemoryObjectStore,
+    InMemoryProcessingRepository,
 )
 from audio_processing.app import create_app
 from audio_processing.config import Dependencies
-from audio_processing.ports import ObjectStore
+from audio_processing.ports import EventPublisher, ObjectStore, ProcessingRepository
 from tests.signals import SR, speech_like, to_int16, write_wav
 
 INSTITUTION = str(uuid.uuid4())
@@ -37,16 +37,24 @@ class Harness:
     audit: InMemoryAuditClient
 
 
-def make_harness(tmp_path: Path, store: ObjectStore) -> Harness:
-    publisher = InMemoryEventPublisher()
+def make_harness(
+    tmp_path: Path,
+    store: ObjectStore,
+    repository: ProcessingRepository | None = None,
+    internal_token: str | None = None,
+    publisher: EventPublisher | None = None,
+) -> Harness:
+    recorder = InMemoryEventPublisher()
     audit = InMemoryAuditClient()
-    deps = Dependencies(store=store, publisher=publisher, audit=audit, work_dir=tmp_path / "w")
-    return Harness(TestClient(create_app(deps)), store, publisher, audit)
-
-
-@pytest.fixture
-def harness(tmp_path: Path) -> Harness:
-    return make_harness(tmp_path, InMemoryObjectStore())
+    deps = Dependencies(
+        store=store,
+        publisher=publisher or recorder,
+        audit=audit,
+        work_dir=tmp_path / "w",
+        repository=repository or InMemoryProcessingRepository(),
+        internal_token=internal_token,
+    )
+    return Harness(TestClient(create_app(deps)), store, recorder, audit)
 
 
 def upload_recording(store: ObjectStore, path: Path, recording_id: str) -> str:
@@ -71,6 +79,8 @@ def uploaded_event(path: Path, uri: str, recording_id: str, **data: Any) -> dict
         "durationMs": frames * 1000 // rate,
         "audioFormat": "wav_pcm_s16le",
         "startedAt": "2026-11-04T19:00:00+00:00",
+        "endedAt": "2026-11-04T20:30:00+00:00",
+        "institutionId": INSTITUTION,
     }
     payload.update(data)
     return {
@@ -96,9 +106,8 @@ def test_recording_uploaded_is_assessed_segmented_and_published(
     recording_id = str(uuid.uuid4())
     uri = upload_recording(harness.store, path, recording_id)
 
-    response = harness.client.post(
-        "/v1/events/recording-uploaded", json=uploaded_event(path, uri, recording_id)
-    )
+    event = uploaded_event(path, uri, recording_id)
+    response = harness.client.post("/v1/events/recording-uploaded", json=event)
     assert response.status_code == 200, response.text
     result = response.json()
     assert result["status"] == "segmented"
@@ -112,6 +121,10 @@ def test_recording_uploaded_is_assessed_segmented_and_published(
     assert quality[0].institution_id == INSTITUTION
     data = segmented[0].data
     assert data["recordingSessionId"] == recording_id
+    assert data["startedAt"] == "2026-11-04T19:00:00Z"
+    assert data["endedAt"] == "2026-11-04T20:30:00Z"
+    assert data["institutionId"] == INSTITUTION
+    assert "classSectionId" not in data
     assert data["durationMs"] == 12 * 60_000
     prefix = f"mem://recordings/{INSTITUTION}/2026/11/04/{recording_id}/segments/"
     assert [s["storageUri"] for s in data["segments"]] == [f"{prefix}{i:04d}.wav" for i in range(3)]
@@ -131,11 +144,13 @@ def test_recording_uploaded_is_assessed_segmented_and_published(
 
     assert harness.audit.actions() == ["audio.quality_assessed", "audio.segmented"]
 
-    # Redelivery is idempotent.
-    again = harness.client.post(
-        "/v1/events/recording-uploaded", json=uploaded_event(path, uri, recording_id)
-    )
-    assert again.json()["status"] == "duplicate"
+    # Redelivery of the same event (same eventId) is idempotent.
+    again = harness.client.post("/v1/events/recording-uploaded", json=event)
+    assert again.status_code == 200
+    duplicate = again.json()
+    assert duplicate["status"] == "duplicate"
+    assert duplicate["report"]["verdict"] == "good"
+    assert len(duplicate["segments"]) == 3
     assert len(harness.publisher.events) == 2
 
 
@@ -253,3 +268,17 @@ def test_segmentation_endpoint(harness: Harness, tmp_path: Path) -> None:
 
     bad = harness.client.post("/v1/segmentation?targetSeconds=60&maxSeconds=30", content=body)
     assert bad.status_code == 422
+
+
+def test_class_section_is_carried_when_known(harness: Harness, tmp_path: Path) -> None:
+    path = lecture(tmp_path, 1)
+    recording_id = str(uuid.uuid4())
+    uri = upload_recording(harness.store, path, recording_id)
+    section = str(uuid.uuid4())
+    event = uploaded_event(path, uri, recording_id, classSectionId=section)
+    event["institutionId"] = None  # tenant falls back to data.institutionId
+    assert harness.client.post("/v1/events/recording-uploaded", json=event).status_code == 200
+    segmented = harness.publisher.of_type("recording.segmented")[0]
+    assert segmented.data["classSectionId"] == section
+    assert segmented.data["institutionId"] == INSTITUTION
+    assert segmented.institution_id == INSTITUTION

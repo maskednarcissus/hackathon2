@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import json
 import uuid
 from dataclasses import dataclass
@@ -20,13 +19,12 @@ from audio_ingestion.adapters.local_store import EncryptedLocalObjectStore
 from audio_ingestion.adapters.memory import (
     InMemoryAuditClient,
     InMemoryEventPublisher,
-    InMemoryRecordingRepository,
-    InMemoryUploadRepository,
     StaticDeviceKeyResolver,
+    in_memory_repositories,
 )
 from audio_ingestion.app import create_app
 from audio_ingestion.config import Dependencies
-from audio_ingestion.ports import DeviceIdentity
+from audio_ingestion.ports import DeviceIdentity, RecordingRepository, UploadRepository
 from audio_ingestion.signing import sign_request
 
 INSTITUTION_ID = str(uuid.uuid4())
@@ -117,21 +115,28 @@ class Harness:
         return SignedClient(self.client, device)
 
 
-@pytest.fixture
-def harness(tmp_path: Path) -> Harness:
+def build_harness(
+    tmp_path: Path,
+    recordings: RecordingRepository | None = None,
+    uploads: UploadRepository | None = None,
+    resolver: StaticDeviceKeyResolver | None = None,
+    internal_token: str | None = None,
+) -> Harness:
     publisher = InMemoryEventPublisher()
     audit = InMemoryAuditClient()
-    resolver = StaticDeviceKeyResolver()
-    key = base64.b64decode(base64.b64encode(b"k" * 32))
-    store = EncryptedLocalObjectStore(tmp_path / "objects", key)
+    resolver = resolver or StaticDeviceKeyResolver()
+    store = EncryptedLocalObjectStore(tmp_path / "objects", b"k" * 32)
+    if recordings is None or uploads is None:
+        recordings, uploads = in_memory_repositories()
     deps = Dependencies(
-        recordings=InMemoryRecordingRepository(),
-        uploads=InMemoryUploadRepository(),
+        recordings=recordings,
+        uploads=uploads,
         store=store,
         publisher=publisher,
         key_resolver=resolver,
         audit=audit,
         staging_dir=tmp_path / "staging",
+        internal_token=internal_token,
     )
     client = TestClient(create_app(deps))
     device = make_device()
@@ -146,3 +151,8 @@ def harness(tmp_path: Path) -> Harness:
         device=device,
         signed=SignedClient(client, device),
     )
+
+
+@pytest.fixture
+def harness(tmp_path: Path) -> Harness:
+    return build_harness(tmp_path)

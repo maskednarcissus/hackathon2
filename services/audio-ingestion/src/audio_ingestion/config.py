@@ -9,14 +9,14 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+from audio_ingestion.adapters.event_bus import HttpEventBusPublisher
 from audio_ingestion.adapters.http import HttpAuditClient, HttpDeviceKeyResolver
 from audio_ingestion.adapters.local_store import EncryptedLocalObjectStore, load_encryption_key
 from audio_ingestion.adapters.memory import (
     InMemoryAuditClient,
-    InMemoryRecordingRepository,
-    InMemoryUploadRepository,
     LoggingEventPublisher,
     StaticDeviceKeyResolver,
+    in_memory_repositories,
 )
 from audio_ingestion.ports import (
     AuditClient,
@@ -42,6 +42,7 @@ class Dependencies:
     audit: AuditClient
     staging_dir: Path
     clock: Callable[[], datetime] = field(default=_utcnow)
+    internal_token: str | None = None
 
 
 def _default_dir(env: str, name: str) -> Path:
@@ -55,7 +56,10 @@ def dependencies_from_env() -> Dependencies:
     ``AUDIO_STORAGE_BACKEND``  ``local`` (default) | ``gcs``
     ``AUDIO_LOCAL_STORAGE_DIR`` / ``AUDIO_ENCRYPTION_KEY`` (base64, 32 bytes) for ``local``
     ``GCS_AUDIO_BUCKET`` / ``GCS_KMS_KEY_NAME`` / ``GCP_PROJECT_ID`` for ``gcs``
-    ``EVENT_PUBLISHER``         ``log`` (default) | ``pubsub``
+    ``DATABASE_URL``            set → PostgreSQL repositories, unset → in-memory
+    ``EVENT_BUS_URL``           set → HTTP event bus; else ``PUBSUB_PROJECT_ID`` → Pub/Sub;
+                                else structured-log publisher
+    ``INTERNAL_API_TOKEN``      required as ``x-internal-token`` on ``/internal/*`` when set
     ``DEVICE_MANAGEMENT_URL``   base URL; unset → static resolver (no devices, dev only)
     ``AUDIT_URL``               base URL; unset → in-memory audit
     ``UPLOAD_STAGING_DIR``      directory for in-flight chunks
@@ -75,27 +79,51 @@ def dependencies_from_env() -> Dependencies:
             load_encryption_key(os.environ.get("AUDIO_ENCRYPTION_KEY")),
         )
 
+    internal_token = os.environ.get("INTERNAL_API_TOKEN") or None
     publisher: EventPublisher
-    if os.environ.get("EVENT_PUBLISHER", "log") == "pubsub":
+    bus_url = os.environ.get("EVENT_BUS_URL")
+    pubsub_project = os.environ.get("PUBSUB_PROJECT_ID")
+    if bus_url:
+        publisher = HttpEventBusPublisher(bus_url, internal_token)
+    elif pubsub_project:
         from audio_ingestion.adapters.gcp import PubSubEventPublisher
 
-        publisher = PubSubEventPublisher(os.environ["GCP_PROJECT_ID"])
+        publisher = PubSubEventPublisher(pubsub_project)
     else:
         publisher = LoggingEventPublisher()
 
+    recordings: RecordingRepository
+    uploads: UploadRepository
+    database_url = os.environ.get("DATABASE_URL")
+    if database_url:
+        from audio_ingestion.adapters.postgres import (
+            PostgresRecordingRepository,
+            PostgresUploadRepository,
+            create_pool,
+        )
+
+        pool = create_pool(database_url)
+        recordings = PostgresRecordingRepository(pool)
+        uploads = PostgresUploadRepository(pool)
+    else:
+        recordings, uploads = in_memory_repositories()
+
     dm_url = os.environ.get("DEVICE_MANAGEMENT_URL")
     resolver: DeviceKeyResolver = (
-        HttpDeviceKeyResolver(dm_url) if dm_url else StaticDeviceKeyResolver()
+        HttpDeviceKeyResolver(dm_url, internal_token) if dm_url else StaticDeviceKeyResolver()
     )
     audit_url = os.environ.get("AUDIT_URL")
-    audit: AuditClient = HttpAuditClient(audit_url) if audit_url else InMemoryAuditClient()
+    audit: AuditClient = (
+        HttpAuditClient(audit_url, internal_token) if audit_url else InMemoryAuditClient()
+    )
 
     return Dependencies(
-        recordings=InMemoryRecordingRepository(),
-        uploads=InMemoryUploadRepository(),
+        recordings=recordings,
+        uploads=uploads,
         store=store,
         publisher=publisher,
         key_resolver=resolver,
         audit=audit,
         staging_dir=_default_dir("UPLOAD_STAGING_DIR", "staging"),
+        internal_token=internal_token,
     )

@@ -12,7 +12,16 @@ publish `audio.quality_assessed` → if the verdict is `unusable`, stop here (au
 `pipelineStopped: true`; notifications raises the `poor_audio_quality` incident) →
 otherwise segment, store each segment WAV at
 `recordings/…/{recordingSessionId}/segments/{index:04d}.wav` and publish
-`recording.segmented`. Redelivered events are idempotent per `recordingSessionId`.
+`recording.segmented` (with the recording's `startedAt`, `endedAt`, `institutionId` and,
+when known, `classSectionId`, so transcription can resolve the class section).
+
+Consumption is idempotent by `eventId` (`processed_events`, consumer `audio-processing`):
+outputs are written and published first — with event ids derived from the consumed id
+(`uuid5`) — and the event is marked processed last, in the same transaction as the
+quality report, `audio_segments` rows and `recording_sessions.audio_quality_score`. A crash
+or publish failure (non-2xx → redelivery) therefore completes the work instead of losing it;
+a redelivered, already-processed event returns `status: "duplicate"` with the stored result.
+Unknown recordings → `422 unknown_recording` (dead-lettered by the bus).
 
 ## Endpoints (port 8002)
 
@@ -58,7 +67,8 @@ CMEK store, in-memory / logging / Pub/Sub publishers, audit client).
 
 Storage variables are shared with audio-ingestion (`AUDIO_STORAGE_BACKEND`,
 `AUDIO_LOCAL_STORAGE_DIR`, `AUDIO_ENCRYPTION_KEY`, `GCS_AUDIO_BUCKET`,
-`GCS_KMS_KEY_NAME`), plus `EVENT_PUBLISHER`, `GCP_PROJECT_ID`, `AUDIT_URL`,
+`GCS_KMS_KEY_NAME`), plus `DATABASE_URL` (Postgres, unset → in-memory), `EVENT_BUS_URL`
+(HTTP bus) or `PUBSUB_PROJECT_ID` (Pub/Sub), `INTERNAL_API_TOKEN`, `AUDIT_URL`,
 `PROCESSING_WORK_DIR`, `SEGMENT_TARGET_SECONDS`, `SEGMENT_MAX_SECONDS`.
 
 ## Development
@@ -67,4 +77,6 @@ Storage variables are shared with audio-ingestion (`AUDIO_STORAGE_BACKEND`,
 pip install -e ".[dev]"
 uvicorn main:app --app-dir src --port 8002
 ruff check . && ruff format --check . && mypy src/ && pytest
+# Postgres scenarios (tests/test_processing_pg.py), skipped without TEST_DATABASE_URL:
+TEST_DATABASE_URL="postgresql://ci@/postgres?host=/var/tmp/cipg&port=5433" pytest
 ```
