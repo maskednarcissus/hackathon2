@@ -80,3 +80,28 @@ The in-memory repository implements the `CalendarRepository` port. The PostgreSQ
 
 Schema gaps: `data/migrations/pending/calendar.sql`. With `TEST_DATABASE_URL` set, `src/calendar.pg.test.ts` runs against a
 fresh database with every migration applied.
+
+## External calendars (Phase 6 §6.9)
+
+Per-student Google Calendar and Microsoft 365 connections (`src/external/`).
+
+| Route                                                          | Auth        | Purpose                                                                                                                                        |
+| -------------------------------------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /v1/students/:id/calendar-connections`                    | student JWT | Connections (no tokens) with status `active` / `broken`, last sync                                                                             |
+| `POST /v1/students/:id/calendar-connections/connect/:provider` | student JWT | `{ authorizationUrl, state }` — OAuth 2.0 code flow, PKCE S256, single-use 10-min state                                                        |
+| `GET /v1/oauth/:provider/callback`                             | state       | Exchanges the code, creates the dedicated "Classroom Intelligence" calendar, initial sync; redirects to `CALENDAR_CONNECT_RETURN_URL` when set |
+| `DELETE /v1/students/:id/calendar-connections/:connectionId`   | student JWT | Deletes the remote calendar, revokes the grant, removes local data                                                                             |
+| `POST /internal/v1/events/calendar`                            | internal    | Bus subscriber for `calendar.event_*` (Pub/Sub push or raw envelope, idempotent by `eventId`)                                                  |
+| `POST /internal/v1/external-calendars/reconcile`               | internal    | Nightly reconcile (all or `{studentId}`): catches up and removes events the student no longer sees                                             |
+
+- Google: Calendar API v3, scope `calendar.app.created`, deterministic event ids → retried inserts become patches.
+  Microsoft: Graph `/me/calendars`, `/me/calendars/{id}/events`, `/me/events/{id}` with `transactionId`.
+- Sync is per (connection, event) link with the remote id and synced version: same version → skipped; cancelled or no
+  longer visible → remote delete. Exams 2 h, quizzes 1 h, presentations 1.5 h; events without time are all-day.
+- Tokens are AES-256-GCM sealed (AAD = connection id) with `CALENDAR_TOKEN_KEY` (base64 32 bytes) or
+  `CALENDAR_TOKEN_KEY_REF=env:NAME`; refreshed 60 s before expiry, a 401 triggers one refresh + retry.
+  `invalid_grant` (user revoked access) marks the connection `broken` and discards the tokens.
+- DSR: access lists connections; deletion/anonymisation/restriction remove them with their remote calendars.
+- Config: `GOOGLE_CALENDAR_CLIENT_ID` / `GOOGLE_CALENDAR_CLIENT_SECRET(_REF)`, `MICROSOFT_CALENDAR_CLIENT_ID` /
+  `MICROSOFT_CALENDAR_CLIENT_SECRET(_REF)` / `MICROSOFT_CALENDAR_TENANT`, `CALENDAR_OAUTH_REDIRECT_BASE_URL`.
+  Schema: `data/migrations/pending/calendar-phase6.sql`. Tests use an in-process fake provider (no live calls).

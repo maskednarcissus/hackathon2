@@ -366,7 +366,7 @@ describe.skipIf(!TEST_DATABASE_URL)('calendar on PostgreSQL', () => {
     expect(dsr.json()).toEqual({
       service: 'calendar',
       status: 'completed',
-      items: { feedTokensRemoved: 1 },
+      items: { feedTokensRemoved: 1, externalConnectionsRemoved: 0, remoteCalendarsDeleted: 0 },
     });
     const after = await db.pool.query(
       'SELECT count(*)::int AS n FROM calendar_feed_tokens WHERE student_id = $1',

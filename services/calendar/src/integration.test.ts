@@ -348,14 +348,14 @@ describe('DSR handler (§5)', () => {
     expect(deletion.json()).toEqual({
       service: 'calendar',
       status: 'completed',
-      items: { feedTokensRemoved: 1 },
+      items: { feedTokensRemoved: 1, externalConnectionsRemoved: 0, remoteCalendarsDeleted: 0 },
     });
     expect((await app.inject({ method: 'GET', url: feedPath })).statusCode).toBe(401);
     // Idempotent: a retry reports nothing left to remove.
     expect((await dsr('deletion', body())).json()).toEqual({
       service: 'calendar',
       status: 'completed',
-      items: { feedTokensRemoved: 0 },
+      items: { feedTokensRemoved: 0, externalConnectionsRemoved: 0, remoteCalendarsDeleted: 0 },
     });
   });
 

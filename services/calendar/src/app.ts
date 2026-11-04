@@ -7,6 +7,10 @@ import Fastify, {
 } from 'fastify';
 import { z } from 'zod';
 import { InMemoryEventPublisher, type EventPublisher } from './events.js';
+import { TokenCipher } from './external/crypto.js';
+import { InMemoryExternalCalendarRepository } from './external/repository.js';
+import { registerExternalCalendarRoutes } from './external/routes.js';
+import { ExternalCalendarService, type ExternalCalendarDeps } from './external/sync.js';
 import { extractBearerToken, JwtError, type AccessTokenVerifier } from './jwt-verify.js';
 import { InMemoryAuditClient, type AuditClient } from './audit.js';
 import { detectConflicts } from './conflicts.js';
@@ -55,6 +59,10 @@ export interface AppDeps {
    * token whose `pid` is the student (or a coordinator/admin of the student's institution).
    */
   verifyAccessToken?: AccessTokenVerifier;
+  /** Phase 6 §6.9 external calendars (Google / Microsoft 365); defaults to in-memory, no providers. */
+  external?: ExternalCalendarDeps;
+  /** Where the OAuth callback redirects the browser after connecting (student web). */
+  externalReturnUrl?: string;
   logger?: FastifyServerOptions['logger'];
 }
 
@@ -436,6 +444,23 @@ export function buildApp(deps: AppDeps = {}): FastifyInstance {
       .send(body);
   });
 
+  // ---- External calendars (Phase 6 §6.9) ------------------------------------------------
+  const externalDeps: ExternalCalendarDeps = deps.external ?? {
+    repo: new InMemoryExternalCalendarRepository(),
+    providers: {},
+    cipher: TokenCipher.ephemeral(),
+    redirectBaseUrl: 'http://localhost:4005',
+  };
+  const externalService = new ExternalCalendarService(externalDeps, repo, clock);
+  registerExternalCalendarRoutes(app, {
+    service: externalService,
+    studentAccess,
+    internalOnly,
+    markProcessed: (id) => externalDeps.repo.markProcessed(id),
+    unmarkProcessed: (id) => externalDeps.repo.unmarkProcessed(id),
+    returnUrl: deps.externalReturnUrl,
+  });
+
   // ---- LGPD data subject rights (Phase 4 §6; integration §5: calendar owns the feed token) -----
   app.post('/internal/v1/dsr/:type', { preHandler: internalOnly }, async (req) => {
     const { type } = DsrParamsSchema.parse(req.params);
@@ -450,14 +475,20 @@ export function buildApp(deps: AppDeps = {}): FastifyInstance {
     }
     if (type === 'deletion' || type === 'anonymization' || type === 'restriction') {
       const removed = await feedTokens.delete(body.subjectId);
+      // Phase 6: external calendar connections, their remote calendars/events and sealed tokens.
+      const external = await externalService.eraseStudent(body.subjectId);
       req.log.info(
-        { requestId: body.requestId, type, removed },
-        'dsr: calendar feed token processed',
+        { requestId: body.requestId, type, removed, ...external },
+        'dsr: calendar feed token and external connections processed',
       );
       return {
         service: 'calendar',
         status: 'completed',
-        items: { feedTokensRemoved: removed ? 1 : 0 },
+        items: {
+          feedTokensRemoved: removed ? 1 : 0,
+          externalConnectionsRemoved: external.connectionsRemoved,
+          remoteCalendarsDeleted: external.remoteCalendarsDeleted,
+        },
       };
     }
     if (type === 'access') {
@@ -467,6 +498,12 @@ export function buildApp(deps: AppDeps = {}): FastifyInstance {
         status: 'completed',
         items: {
           calendarFeed: record ? { active: true, createdAt: record.createdAt } : { active: false },
+          externalCalendarConnections: (await externalService.list(body.subjectId)).map((c) => ({
+            provider: c.provider,
+            status: c.status,
+            createdAt: c.createdAt,
+            lastSyncAt: c.lastSyncAt,
+          })),
         },
       };
     }

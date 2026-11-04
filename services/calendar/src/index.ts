@@ -7,6 +7,18 @@ import { InMemoryFeedTokenRepository, type FeedTokenRepository } from './feed-to
 import { createJwksAccessTokenVerifier, type AccessTokenVerifier } from './jwt-verify.js';
 import { InMemoryCalendarRepository, type CalendarRepository } from './repository.js';
 import { PgCalendarRepository, PgFeedTokenRepository } from './repository.pg.js';
+import { TokenCipher } from './external/crypto.js';
+import {
+  GoogleCalendarProvider,
+  MicrosoftCalendarProvider,
+  type CalendarProvider,
+  type ProviderId,
+} from './external/providers.js';
+import {
+  InMemoryExternalCalendarRepository,
+  type ExternalCalendarRepository,
+} from './external/repository.js';
+import { PgExternalCalendarRepository } from './external/repository.pg.js';
 
 const env = process.env;
 const port = Number(env['PORT'] ?? 4005);
@@ -22,6 +34,7 @@ const start = async (): Promise<void> => {
   // §1: DATABASE_URL → Postgres, otherwise in-memory.
   let repository: CalendarRepository;
   let feedTokens: FeedTokenRepository;
+  let externalRepo: ExternalCalendarRepository;
   if (env['DATABASE_URL']) {
     const pool = new pg.Pool({
       connectionString: env['DATABASE_URL'],
@@ -29,9 +42,11 @@ const start = async (): Promise<void> => {
     });
     repository = new PgCalendarRepository(pool);
     feedTokens = new PgFeedTokenRepository(pool);
+    externalRepo = new PgExternalCalendarRepository(pool);
   } else {
     repository = new InMemoryCalendarRepository();
     feedTokens = new InMemoryFeedTokenRepository();
+    externalRepo = new InMemoryExternalCalendarRepository();
     warnings.push('DATABASE_URL is not set: using in-memory repositories');
   }
 
@@ -62,11 +77,56 @@ const start = async (): Promise<void> => {
     warnings.push('IDENTITY_JWKS_URL is not set: student routes are not authenticated (dev only)');
   }
 
+  // Phase 6 §6.9: external calendars. Secrets come from Secret Manager via the environment.
+  const secret = (name: string): string | undefined => {
+    const ref = env[`${name}_REF`];
+    return ref?.startsWith('env:') ? env[ref.slice(4)] : env[name];
+  };
+  const providers: Partial<Record<ProviderId, CalendarProvider>> = {};
+  const googleId = env['GOOGLE_CALENDAR_CLIENT_ID'];
+  const googleSecret = secret('GOOGLE_CALENDAR_CLIENT_SECRET');
+  if (googleId && googleSecret) {
+    providers.google = new GoogleCalendarProvider({
+      clientId: googleId,
+      clientSecret: googleSecret,
+    });
+  }
+  const msId = env['MICROSOFT_CALENDAR_CLIENT_ID'];
+  const msSecret = secret('MICROSOFT_CALENDAR_CLIENT_SECRET');
+  if (msId && msSecret) {
+    providers.microsoft = new MicrosoftCalendarProvider({
+      clientId: msId,
+      clientSecret: msSecret,
+      tenant: env['MICROSOFT_CALENDAR_TENANT'] ?? 'common',
+    });
+  }
+  let cipher = TokenCipher.fromEnv(env);
+  if (!cipher) {
+    if (env['NODE_ENV'] === 'production' && Object.keys(providers).length > 0) {
+      throw new Error('CALENDAR_TOKEN_KEY (or CALENDAR_TOKEN_KEY_REF) is required in production');
+    }
+    cipher = TokenCipher.ephemeral();
+    if (Object.keys(providers).length > 0) {
+      warnings.push(
+        'CALENDAR_TOKEN_KEY is not set: external calendar tokens will not survive a restart',
+      );
+    }
+  }
+
   const app = buildApp({
     repository,
     feedTokens,
     audit: new HttpAuditClient(auditUrl, log),
     events,
+    external: {
+      repo: externalRepo,
+      providers,
+      cipher,
+      redirectBaseUrl: env['CALENDAR_OAUTH_REDIRECT_BASE_URL'] ?? `http://localhost:${port}`,
+    },
+    ...(env['CALENDAR_CONNECT_RETURN_URL']
+      ? { externalReturnUrl: env['CALENDAR_CONNECT_RETURN_URL'] }
+      : {}),
     ...(internalToken ? { internalToken } : {}),
     ...(verifyAccessToken ? { verifyAccessToken } : {}),
     logger: { level: env['LOG_LEVEL'] ?? 'info' },
