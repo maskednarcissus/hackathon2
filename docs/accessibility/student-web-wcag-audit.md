@@ -80,7 +80,7 @@ text. The student web therefore uses its own `--text-2` #475569.
 
 Legend: ✅ verified (automated or by code review) · 🔶 implemented, manual verification pending · n/a not applicable.
 
-Pages: E = /entrar · H = / · L = /aulas · D = /aulas/[id] · T = /aulas/[id]/transcricao · B = /busca · C = /calendario (month/week/agenda) · V = /calendario/[id] · A = /assistente · N = /notificacoes · P = /preferencias
+Pages (Phase 6 revision pages share the same components and were covered by §4b): E = /entrar · H = / · L = /aulas · D = /aulas/[id] · T = /aulas/[id]/transcricao · B = /busca · C = /calendario (month/week/agenda) · V = /calendario/[id] · A = /assistente · N = /notificacoes · P = /preferencias
 
 | SC     | Requirement               | E   | H   | L   | D   | T   | B   | C   | V   | A   | N   | P   | Notes                                                                                                            |
 | ------ | ------------------------- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | ---------------------------------------------------------------------------------------------------------------- |
@@ -119,6 +119,25 @@ Pages: E = /entrar · H = / · L = /aulas · D = /aulas/[id] · T = /aulas/[id]/
 | 3.3.8  | Accessible authentication | ✅  | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | password managers and paste allowed; no cognitive test                                                           |
 | 4.1.2  | Name, role, value         | ✅  | ✅  | ✅  | ✅  | ✅  | ✅  | ✅  | ✅  | ✅  | ✅  | ✅  | `aria-current` on nav and view switch; `aria-pressed` on feedback                                                |
 | 4.1.3  | Status messages           | ✅  | ✅  | ✅  | ✅  | ✅  | ✅  | ✅  | ✅  | ✅  | ✅  | ✅  | `aria-live` for assistant progress, copy, save, report, result counts                                            |
+
+## 4b. Phase 6 re-audit — `/revisao` and `/revisao/[planId]` (deliverable 6.2)
+
+Re-run of the full script on 15 pages × 2 viewports × 2 schemes (60 runs, including both revision pages):
+**60/60 pass**. Bottom navigation now holds 6 items (Revisão added); no reflow at 375 px.
+
+Interaction run (Playwright, 375 px), with the automated checks repeated **after** expanding content:
+
+| Check                                                                                                                                                                                 | Result       |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
+| Focus concept and section pre-filled from a lecture page link (`/revisao?foco=…&termo=…&secao=…`)                                                                                     | ✅           |
+| Plan creation via server action → redirect to the plan; recent plan listed on `/revisao`                                                                                              | ✅           |
+| Items grouped by kind with `h2` sections + in-page section links                                                                                                                      | ✅           |
+| Every item labelled "Gerado por IA"; citation chips deep-link to the transcript (`?t=ms#s-n`)                                                                                         | ✅           |
+| Flashcard: "Virar cartão" button with `aria-expanded`/`aria-controls`; back revealed by content swap (no flip animation → no motion concerns)                                         | ✅           |
+| Quiz: native radio group in `fieldset/legend`; feedback announced (`role=status`); correct/chosen option identified by **text** ("resposta correta", "sua resposta"), not only colour | ✅           |
+| SM-2 grading: 6 buttons with plain-language labels (0 "Não lembrei nada" … 5 "Acertei na hora"), `aria-pressed`, next-review interval announced via `aria-live`                       | ✅           |
+| Limitations: always-visible "Sobre este material" block + plan-specific `limitations` codes and dropped-item count in plain language                                                  | ✅           |
+| Automated checks on the expanded plan page (labels, names, targets, contrast, reflow)                                                                                                 | ✅ no issues |
 
 ## 5. Pending (not verifiable in this environment)
 

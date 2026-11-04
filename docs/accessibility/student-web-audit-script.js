@@ -17,6 +17,8 @@ const PAGES = [
   ['calendario-agenda', '/calendario?view=agenda', true],
   ['evento', '/calendario/e1', true],
   ['assistente', '/assistente', true],
+  ['revisao', '/revisao?foco=55555555-5555-4555-8555-555555555555&termo=Curva%20IS', true],
+  ['revisao-plano', '/revisao/66666666-6666-4666-8666-666666666666', true],
   ['notificacoes', '/notificacoes', true],
   ['preferencias', '/preferencias', true],
 ];

@@ -1,5 +1,10 @@
 import { DEFAULT_TIMEZONE } from './config';
-import type { AcademicEventType, CalendarEvent, ConfirmationStatus } from './types';
+import type {
+  AcademicEventType,
+  CalendarEvent,
+  ConfirmationStatus,
+  EventProvenance,
+} from './types';
 
 /** 3_725_000 → "01:02:05" (always hh:mm:ss so anchors line up). */
 export function formatTimestamp(ms: number): string {
@@ -148,4 +153,9 @@ export function pluralize(n: number, one: string, many: string): string {
 /** "quinta-feira, 5 de novembro" → "Quinta-feira, 5 de novembro" (CSS capitalize would yield "De"). */
 export function capitalizeFirst(text: string): string {
   return text.charAt(0).toLocaleUpperCase('pt-BR') + text.slice(1);
+}
+
+/** Student calendar items carry `source`; the detail endpoint carries `provenance`. */
+export function eventSource(event: CalendarEvent): EventProvenance | undefined {
+  return event.source ?? event.provenance ?? undefined;
 }

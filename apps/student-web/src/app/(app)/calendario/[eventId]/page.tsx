@@ -7,6 +7,7 @@ import { calendar } from '@/lib/api';
 import {
   CHANGE_FIELD_LABELS,
   EVENT_TYPE_LABELS,
+  eventSource,
   eventStatus,
   formatDateLong,
   formatDateTime,
@@ -52,7 +53,7 @@ export default async function EventPage({
   const event = result.data;
   const status = eventStatus(event);
   const history: CalendarChange[] = historyResult.ok ? historyResult.data : (event.history ?? []);
-  const p = event.provenance;
+  const p = eventSource(event);
   const scheduledClassId = p?.scheduledClassId;
 
   return (
@@ -62,7 +63,7 @@ export default async function EventPage({
         <div>
           <p className="meta">
             <span>{EVENT_TYPE_LABELS[event.type] ?? 'Evento'}</span>
-            {event.courseName !== undefined && <span>{event.courseName}</span>}
+            {event.courseName ? <span>{event.courseName}</span> : null}
           </p>
           <h1>{event.title}</h1>
         </div>

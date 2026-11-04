@@ -7,13 +7,26 @@ import { AiBadge, Breadcrumb, ErrorState } from '@/components/States';
 import { calendar, lectures } from '@/lib/api';
 import { addDays, todayIn } from '@/lib/calendar-grid';
 import { DEFAULT_TIMEZONE } from '@/lib/config';
-import { formatTimestamp, spokenTimestamp } from '@/lib/format';
+import { eventSource, formatTimestamp, spokenTimestamp } from '@/lib/format';
 import { guard } from '@/lib/http';
 import { transcriptAtMs, transcriptAtSegment } from '@/lib/links';
 import { requireSession } from '@/lib/session';
 import type { LectureTopic } from '@/lib/types';
 
 export const metadata: Metadata = { title: 'Aula' };
+
+function revisionHref(
+  classSectionId: string | null | undefined,
+  conceptId?: string,
+  term?: string,
+): string {
+  const sp = new URLSearchParams();
+  if (classSectionId) sp.set('secao', classSectionId);
+  if (conceptId !== undefined) sp.set('foco', conceptId);
+  if (term !== undefined) sp.set('termo', term);
+  const q = sp.toString();
+  return q === '' ? '/revisao' : `/revisao?${q}#new-plan-title`;
+}
 
 const ASKED_BY = {
   student: 'Pergunta de estudante',
@@ -83,7 +96,7 @@ export default async function LecturePage({
     );
   }
   const lecture = result.data;
-  const classSectionId = (lecture as { classSectionId?: string }).classSectionId ?? secao;
+  const classSectionId = lecture.classSectionId ?? secao;
 
   const today = todayIn(DEFAULT_TIMEZONE);
   const events = await calendar.studentEvents(
@@ -94,8 +107,8 @@ export default async function LecturePage({
   const announcements = events.ok
     ? events.data.filter(
         (e) =>
-          e.provenance?.transcriptId === lecture.transcriptId ||
-          e.provenance?.scheduledClassId === scheduledClassId,
+          eventSource(e)?.transcriptId === lecture.transcriptId ||
+          eventSource(e)?.scheduledClassId === scheduledClassId,
       )
     : [];
 
@@ -110,6 +123,9 @@ export default async function LecturePage({
         <div className="btn-row">
           <Link href={`/aulas/${encodeURIComponent(scheduledClassId)}/transcricao`} className="btn">
             Ver transcrição
+          </Link>
+          <Link href={revisionHref(classSectionId)} className="btn btn--secondary">
+            Revisar esta disciplina
           </Link>
           <Link
             href={`/assistente?aula=${encodeURIComponent(scheduledClassId)}`}
@@ -164,6 +180,12 @@ export default async function LecturePage({
                           >
                             Ver trecho da aula
                             <span className="visually-hidden"> sobre {concept.term}</span>
+                          </Link>
+                        )}
+                        {concept.id !== undefined && (
+                          <Link href={revisionHref(classSectionId, concept.id, concept.term)}>
+                            Revisar este conceito
+                            <span className="visually-hidden"> ({concept.term})</span>
                           </Link>
                         )}
                         <ReportButton

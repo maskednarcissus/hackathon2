@@ -47,20 +47,16 @@ assistant answers. It posts to audit `POST /v1/content-reports`.
 | `NEXT_PUBLIC_VAPID_PUBLIC_KEY`         | unset: push opt-in shows "not available"            |
 | `COOKIE_INSECURE=1`                    | only for plain-http testing on non-localhost hosts  |
 
-## Contract dependencies beyond the published contracts
+## Backend shapes consumed
 
-1. **`GET /v1/lectures`** (lecture-intelligence) takes
-   `?classSectionIds=a,b&q&courseId&from&to&sort=recent|oldest|course&page&pageSize` and returns
-   `{ items: [{ scheduledClassId, transcriptId, lectureSummaryId, classSectionId, courseId, courseName, title, startsAt, executiveSummary, topicCount }], page, pageSize, total }`.
-   The library and home page need it.
-2. **`LectureStructure.classSectionId`** is needed so content reports from lecture and transcript pages carry it.
-   Until then the app falls back to `?secao=` passed by library links.
-3. **Calendar event `provenance.scheduledClassId`** and **`courseName`** are needed to link events back to the lecture and
-   transcript and to show the course.
-4. Notification items should be `{ id, category, title, body, createdAt, readAt, link? }`. The list can be wrapped in
-   `{ notifications }` or `{ items }`.
-5. Refresh-token rotation: concurrent first requests after expiry may present the same refresh token twice.
-   Identity should accept the immediately-previous token for a short grace window (about 10 s) before treating reuse as theft.
+- lecture-intelligence `GET /v1/lectures` (library/home), `LectureStructure.classSectionId` and `concepts[].id`
+  (focus concepts for revision), revision endpoints `POST /v1/revision/plans`, `GET /v1/revision/plans/{id}?studentId`,
+  `POST /v1/revision/reviews`, `GET /v1/revision/due?studentId`.
+- calendar student view: `{ items: [{ …, courseName, source: { scheduledClassId, transcriptId, startMs, quote, … } }] }`;
+  detail view keeps `provenance`; history via `?view=student`.
+- identity accepts the immediately previous refresh token for 10 s (concurrent refreshes are safe).
+- `?secao=` remains only as a fallback when a lecture structure has no `classSectionId`.
+- Revision plans have no list endpoint; the BFF keeps the last 5 plan ids in an httpOnly cookie (`ci_rev`).
 
 ## Commands
 

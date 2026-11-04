@@ -8,6 +8,7 @@ import type {
   AssistantAnswer,
   CalendarChange,
   CalendarEvent,
+  DueItems,
   FeedToken,
   LectureList,
   LectureStructure,
@@ -15,6 +16,8 @@ import type {
   NotificationPreferences,
   ReportReason,
   ReportResourceType,
+  ReviewResult,
+  RevisionPlan,
   SearchResult,
   SectionsResponse,
   Transcript,
@@ -108,6 +111,35 @@ export const lectures = {
     }),
 };
 
+/* ---------------- revision (Phase 6 §6.2) ---------------- */
+
+export const revision = {
+  createPlan: (body: {
+    studentId: string;
+    institutionId: string;
+    classSectionIds: string[];
+    from?: string;
+    to?: string;
+    focus?: string[];
+  }): Promise<ApiResult<RevisionPlan>> =>
+    request<RevisionPlan>('lectures', '/v1/revision/plans', {
+      method: 'POST',
+      body,
+      timeoutMs: 120_000,
+    }),
+  getPlan: (planId: string, studentId: string): Promise<ApiResult<RevisionPlan>> =>
+    request<RevisionPlan>('lectures', `/v1/revision/plans/${encodeURIComponent(planId)}`, {
+      query: { studentId },
+    }),
+  review: (itemId: string, grade: number, studentId: string): Promise<ApiResult<ReviewResult>> =>
+    request<ReviewResult>('lectures', '/v1/revision/reviews', {
+      method: 'POST',
+      body: { itemId, grade, studentId },
+    }),
+  due: (studentId: string, limit = 30): Promise<ApiResult<DueItems>> =>
+    request<DueItems>('lectures', '/v1/revision/due', { query: { studentId, limit } }),
+};
+
 /* ---------------- transcripts & search ---------------- */
 
 export const transcripts = {
@@ -168,6 +200,7 @@ export const calendar = {
       await request<unknown>(
         'calendar',
         `/v1/calendar-events/${encodeURIComponent(eventId)}/history`,
+        { query: { view: 'student' } },
       ),
       (d) => listFrom<CalendarChange>(d, 'history'),
     ),

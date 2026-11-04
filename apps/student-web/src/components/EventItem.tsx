@@ -16,7 +16,7 @@ export function EventItem({
       <span className="list-item__title">{event.title}</span>
       <span className="meta">
         <span>{EVENT_TYPE_LABELS[event.type] ?? 'Evento'}</span>
-        {event.courseName !== undefined && <span>{event.courseName}</span>}
+        {event.courseName ? <span>{event.courseName}</span> : null}
         {showDate && (
           <span>
             {event.eventDate !== null ? formatDateLong(event.eventDate) : 'Data a confirmar'}

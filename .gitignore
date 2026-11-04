@@ -46,3 +46,4 @@ test-results/
 # AI evaluation artifacts
 tests/audio-evaluation/recordings/
 tests/ai-evaluation/outputs/
+*.tsbuildinfo

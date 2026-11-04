@@ -71,7 +71,7 @@ export default async function TranscriptPage({
     );
   }
   const segments = guard(await transcripts.segments(lecture.data.transcriptId));
-  const classSectionId = (lecture.data as { classSectionId?: string }).classSectionId ?? sp.secao;
+  const classSectionId = lecture.data.classSectionId ?? sp.secao;
   const markers = segments.ok
     ? topicStarts(lecture.data.topics, segments.data)
     : new Map<number, LectureTopic[]>();

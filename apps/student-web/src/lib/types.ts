@@ -71,6 +71,8 @@ export interface LectureTopic {
 }
 
 export interface LectureConcept {
+  /** Stable concept id (Phase 6) — used to focus revision plans. */
+  id?: string;
   term: string;
   definition: string;
   example?: string;
@@ -101,6 +103,8 @@ export interface LectureStructure {
   concepts: LectureConcept[];
   questions: LectureQuestion[];
   readingReferences: ReadingReference[];
+  classSectionId?: string | null;
+  language?: string;
   provenance?: { promptId?: string; promptVersion?: string; model?: string };
 }
 
@@ -198,7 +202,7 @@ export interface CalendarEvent {
   id: string;
   institutionId: string;
   courseId?: string;
-  courseName?: string;
+  courseName?: string | null;
   classSectionId?: string;
   extractedEventId?: string;
   type: AcademicEventType;
@@ -209,7 +213,10 @@ export interface CalendarEvent {
   timezone?: string;
   isOfficial: boolean;
   status?: ConfirmationStatus | 'cancelled';
-  provenance?: EventProvenance;
+  /** Staff/detail view. */
+  provenance?: EventProvenance | null;
+  /** Student view (`GET /v1/students/{id}/calendar-events`). */
+  source?: EventProvenance | null;
   history?: CalendarChange[];
 }
 
@@ -257,3 +264,88 @@ export type ReportReason =
   | 'misattributed_statement'
   | 'transcription_error'
   | 'other';
+
+/* ---------- Revision (Phase 6 §6.2) ---------- */
+
+export type RevisionKind = 'summary' | 'concept_review' | 'flashcards' | 'quiz';
+
+export interface RevisionCitation {
+  scheduledClassId: string;
+  transcriptId: string;
+  segmentIndexes: number[];
+  startMs?: number;
+  endMs?: number;
+}
+
+export interface SummaryContent {
+  title: string;
+  executiveSummary: string;
+  topics: { title: string; startMs?: number | null; endMs?: number | null }[];
+}
+export interface ConceptContent {
+  term: string;
+  definition: string;
+  example?: string;
+}
+export interface FlashcardContent {
+  front: string;
+  back: string;
+}
+export interface QuizContent {
+  question: string;
+  options: string[];
+  correctOption: number;
+  explanation?: string;
+}
+
+export interface RevisionSchedule {
+  repetitions: number;
+  intervalDays: number;
+  easiness: number;
+  dueAt: string;
+  lastGrade: number | null;
+  lastReviewedAt: string | null;
+}
+
+interface RevisionItemBase {
+  id: string;
+  planId: string;
+  scheduledClassId: string;
+  conceptIds: string[];
+  sourceCitations: RevisionCitation[];
+  aiGenerated: true;
+  schedule?: RevisionSchedule;
+}
+export type RevisionItem =
+  | (RevisionItemBase & { kind: 'summary'; content: SummaryContent })
+  | (RevisionItemBase & { kind: 'concept_review'; content: ConceptContent })
+  | (RevisionItemBase & { kind: 'flashcards'; content: FlashcardContent })
+  | (RevisionItemBase & { kind: 'quiz'; content: QuizContent });
+
+export interface RevisionPlan {
+  planId: string;
+  studentId: string;
+  classSectionIds: string[];
+  from: string | null;
+  to: string | null;
+  focus: string[];
+  items: RevisionItem[];
+  generatedAt: string;
+  aiGenerated: true;
+  signals?: Record<string, number>;
+  validation?: { droppedItems?: number; flags?: { path: string; reason: string }[] };
+  limitations: string[];
+}
+
+export interface DueItems {
+  studentId: string;
+  now: string;
+  total: number;
+  items: RevisionItem[];
+}
+
+export interface ReviewResult extends RevisionSchedule {
+  itemId: string;
+  grade: number;
+  reviewedAt: string;
+}

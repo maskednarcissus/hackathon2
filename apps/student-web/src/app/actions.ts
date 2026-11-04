@@ -2,10 +2,12 @@
 
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { identity, lectures, notifications, reports, calendar } from '@/lib/api';
+import { cookies } from 'next/headers';
+import { identity, lectures, notifications, reports, calendar, revision } from '@/lib/api';
 import { calendarPublicUrl } from '@/lib/config';
 import {
   clearSessionCookies,
+  cookieOptions,
   getRefreshToken,
   getSession,
   requireSession,
@@ -253,4 +255,75 @@ export async function createCalendarFeedAction(): Promise<
     result.data.feedUrl ??
     `${calendarPublicUrl}/v1/students/${encodeURIComponent(session.studentId)}/calendar.ics?token=${encodeURIComponent(result.data.token)}`;
   return { ok: true, url };
+}
+
+/* ---------------- revision (Phase 6 §6.2) ---------------- */
+
+const RECENT_PLANS_COOKIE = 'ci_rev';
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export async function createRevisionPlanAction(
+  _prev: FormState,
+  form: FormData,
+): Promise<FormState> {
+  const session = await getSession();
+  if (session === null) return { status: 'error', message: 'Sua sessão expirou. Entre novamente.' };
+  const allowed = await identity.sections();
+  if (!allowed.ok) return { status: 'error', message: allowed.message };
+  const classSectionIds = form
+    .getAll('secao')
+    .filter((v): v is string => typeof v === 'string' && allowed.data.includes(v));
+  if (classSectionIds.length === 0) {
+    return { status: 'error', message: 'Escolha pelo menos uma disciplina.' };
+  }
+  const from = str(form, 'de');
+  const to = str(form, 'ate');
+  const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+  if ((from !== '' && !dateRe.test(from)) || (to !== '' && !dateRe.test(to))) {
+    return { status: 'error', message: 'Informe datas válidas.' };
+  }
+  if (from !== '' && to !== '' && from > to) {
+    return { status: 'error', message: 'A data inicial deve ser anterior à data final.' };
+  }
+  const focus = form
+    .getAll('foco')
+    .filter((v): v is string => typeof v === 'string' && UUID_RE.test(v))
+    .slice(0, 50);
+  const result = await revision.createPlan({
+    studentId: session.studentId,
+    institutionId: session.institutionId,
+    classSectionIds,
+    ...(from !== '' ? { from } : {}),
+    ...(to !== '' ? { to } : {}),
+    ...(focus.length > 0 ? { focus } : {}),
+  });
+  if (!result.ok) return { status: 'error', message: result.message };
+
+  // Remember the last few plans (ids only) so the student can reopen them.
+  const jar = await cookies();
+  const previous = (jar.get(RECENT_PLANS_COOKIE)?.value ?? '')
+    .split(',')
+    .filter((entry) => entry !== '' && !entry.startsWith(`${result.data.planId}~`));
+  const entry = `${result.data.planId}~${result.data.generatedAt.slice(0, 10)}~${result.data.items.length}`;
+  jar.set(
+    RECENT_PLANS_COOKIE,
+    [entry, ...previous].slice(0, 5).join(','),
+    cookieOptions(90 * 24 * 3600),
+  );
+  redirect(`/revisao/${encodeURIComponent(result.data.planId)}`);
+}
+
+export type ReviewActionResult =
+  { ok: true; dueAt: string; intervalDays: number } | { ok: false; message: string };
+
+export async function reviewItemAction(itemId: string, grade: number): Promise<ReviewActionResult> {
+  const session = await getSession();
+  if (session === null) return { ok: false, message: 'Sua sessão expirou. Entre novamente.' };
+  if (!UUID_RE.test(itemId) || !Number.isInteger(grade) || grade < 0 || grade > 5) {
+    return { ok: false, message: 'Avaliação inválida.' };
+  }
+  const result = await revision.review(itemId, grade, session.studentId);
+  if (!result.ok) return { ok: false, message: result.message };
+  revalidatePath('/revisao');
+  return { ok: true, dueAt: result.data.dueAt, intervalDays: result.data.intervalDays };
 }

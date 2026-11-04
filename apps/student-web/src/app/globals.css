@@ -299,8 +299,10 @@ mark {
   align-items: center;
   justify-content: center;
   min-height: var(--bottom-nav-h);
-  font-size: 0.75rem;
+  font-size: 0.6875rem;
   gap: 2px;
+  padding: 0 2px;
+  text-align: center;
 }
 .bottom-nav svg,
 .icon-link svg {
@@ -979,4 +981,61 @@ dialog::backdrop {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* ---------- Revision (Phase 6) ---------- */
+.revision-item {
+  border-left: 4px solid var(--ai);
+}
+.grade-row {
+  display: grid;
+  gap: var(--space-2);
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+}
+.grade-row .btn {
+  justify-content: flex-start;
+  text-align: left;
+  min-height: 44px;
+  height: auto;
+  padding: var(--space-2) var(--space-3);
+}
+.flashcard {
+  border: 1px solid var(--border-strong);
+  /* no flip animation: content swap only (no motion concerns) */
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  margin-bottom: var(--space-3);
+  background: var(--surface);
+}
+.flashcard[data-flipped='true'] {
+  background: var(--surface-2);
+}
+.flashcard__label {
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.flashcard__text {
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+.quiz-option {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-2);
+}
+.quiz-option[data-state='correct'] {
+  border: 2px solid var(--success);
+  background: var(--success-bg);
+}
+.quiz-option[data-state='wrong'] {
+  border: 2px solid var(--danger);
+  background: var(--danger-bg);
+}
+.limitations {
+  border-left: 4px solid var(--warning);
 }
