@@ -1,14 +1,11 @@
-﻿"""Classroom Intelligence — Transcription Service."""
-from fastapi import FastAPI
+"""Classroom Intelligence — Transcription Service entrypoint (``uvicorn main:app --port 8003``)."""
 
-app = FastAPI(
-    title="CI Transcription Service",
-    description="Converts classroom audio recordings into timestamped, structured transcript segments. Supports Brazilian Portuguese with academic vocabulary adaptation.",
-    version="0.1.0",
-)
+from transcription.app import create_app
+from transcription.config import deps_from_env
 
+app = create_app(deps_from_env())
 
-@app.get("/health")
-async def health() -> dict[str, str]:
-    """Service health check."""
-    return {"status": "ok", "service": "transcription"}
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=8003)  # noqa: S104

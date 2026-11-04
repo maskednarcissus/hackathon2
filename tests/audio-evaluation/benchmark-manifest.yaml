@@ -1,4 +1,10 @@
 # Classroom Intelligence — Audio Evaluation Benchmark Manifest
+#
+# Paths are relative to this file. Reference transcripts and provider hypotheses are
+# NOT versioned (LGPD: recordings of real classes). Place them under corpus/<case id>/
+# (gitignored) or pass --hypothesis-dir to score a provider run:
+#   .venv/bin/python tests/audio-evaluation/run_benchmark.py --hypothesis-dir out/chirp_2
+# Cases without data are reported as missing_data.
 version: "1.0"
 gcs_bucket: "ci-eval-audio"
 gcs_prefix: "benchmark/v1/"
@@ -13,6 +19,15 @@ test_cases:
     acoustic_condition: standard_classroom
     expected_wer_max: 0.08
     expected_terminology_accuracy_min: 0.92
+    reference_path: corpus/pt-br-medicine-lecture-90min/reference.txt
+    hypothesis_path: corpus/pt-br-medicine-lecture-90min/hypothesis.txt
+    terms:
+      - anamnese
+      - farmacocinética
+      - farmacodinâmica
+      - posologia
+      - hipertensão arterial
+      - insuficiência cardíaca
 
   - id: pt-br-law-lecture-120min
     description: Law school lecture, Brazilian Portuguese, 120 minutes, professor + student questions
@@ -23,6 +38,15 @@ test_cases:
     acoustic_condition: standard_classroom
     expected_wer_max: 0.10
     expected_terminology_accuracy_min: 0.90
+    reference_path: corpus/pt-br-law-lecture-120min/reference.txt
+    hypothesis_path: corpus/pt-br-law-lecture-120min/hypothesis.txt
+    terms:
+      - habeas corpus
+      - mandado de segurança
+      - jurisprudência
+      - Supremo Tribunal Federal
+      - trânsito em julgado
+      - vade mecum
 
   - id: pt-br-engineering-noisy
     description: Engineering lecture with background HVAC noise
@@ -33,6 +57,13 @@ test_cases:
     acoustic_condition: high_background_noise
     expected_wer_max: 0.15
     expected_terminology_accuracy_min: 0.85
+    reference_path: corpus/pt-br-engineering-noisy/reference.txt
+    hypothesis_path: corpus/pt-br-engineering-noisy/hypothesis.txt
+    terms:
+      - momento fletor
+      - resistência dos materiais
+      - tensão de cisalhamento
+      - módulo de elasticidade
 
   - id: pt-br-economics-reverberant
     description: Economics lecture in a large auditorium with reverberation
@@ -43,6 +74,14 @@ test_cases:
     acoustic_condition: reverberant_auditorium
     expected_wer_max: 0.12
     expected_terminology_accuracy_min: 0.88
+    reference_path: corpus/pt-br-economics-reverberant/reference.txt
+    hypothesis_path: corpus/pt-br-economics-reverberant/hypothesis.txt
+    terms:
+      - elasticidade-preço
+      - custo marginal
+      - produto interno bruto
+      - taxa Selic
+      - política monetária
 
 metrics:
   primary:
