@@ -128,6 +128,25 @@ class DeviceManagementApi:
         )
         return cast(JsonDict, response.json()), response.headers.get("date")
 
+    def command_result(self, command_id: str, payload: JsonDict) -> None:
+        """``POST /v1/devices/{id}/commands/{commandId}/result`` (phase-4 §3).
+
+        ``404``/``409`` mean the server will never accept this result (unknown, cancelled or
+        already answered), so they raise ``ReportRejected`` and the result is dropped.
+        """
+        from ci_agent.commands import ReportRejected
+
+        try:
+            _check(
+                self._client.post(
+                    f"/v1/devices/{self.device_id}/commands/{command_id}/result", json=payload
+                )
+            )
+        except ApiError as exc:
+            if exc.status_code in (404, 409):
+                raise ReportRejected(str(exc)) from exc
+            raise
+
 
 class IngestionApi:
     def __init__(

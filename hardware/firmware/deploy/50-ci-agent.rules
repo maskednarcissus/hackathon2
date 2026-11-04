@@ -1,0 +1,13 @@
+// /etc/polkit-1/rules.d/50-ci-agent.rules
+// Lets the unprivileged ci-agent service honour the remote `reboot` command
+// (`systemctl reboot` → logind over D-Bus). Nothing else is granted.
+polkit.addRule(function (action, subject) {
+  if (
+    subject.user === "ci-agent" &&
+    (action.id === "org.freedesktop.login1.reboot" ||
+      action.id === "org.freedesktop.login1.reboot-multiple-sessions" ||
+      action.id === "org.freedesktop.login1.reboot-ignore-inhibit")
+  ) {
+    return polkit.Result.YES;
+  }
+});

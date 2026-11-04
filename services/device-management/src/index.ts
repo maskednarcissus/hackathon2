@@ -24,7 +24,7 @@ if (ca.ephemeral) {
 if (!env['ADMIN_API_TOKEN'])
   log.warn('ADMIN_API_TOKEN not set: admin routes are unauthenticated (development only)');
 
-const { app, sweepStatuses } = buildApp({
+const service = buildApp({
   loggerInstance: log,
   ...(env['ADMIN_API_TOKEN'] ? { adminToken: env['ADMIN_API_TOKEN'] } : {}),
   deps: {
@@ -38,11 +38,11 @@ const { app, sweepStatuses } = buildApp({
 
 const sweepIntervalMs = Number(env['STATUS_SWEEP_INTERVAL_MS'] ?? 30_000);
 const timer = setInterval(() => {
-  sweepStatuses().catch((err: unknown) => log.error({ err }, 'status sweep failed'));
+  service.sweepStatuses().catch((err: unknown) => log.error({ err }, 'status sweep failed'));
 }, sweepIntervalMs);
 timer.unref();
 
-app
+service.app
   .listen({ port: Number(env['PORT'] ?? 4004), host: env['HOST'] ?? '0.0.0.0' })
   .catch((err: unknown) => {
     log.error(err);

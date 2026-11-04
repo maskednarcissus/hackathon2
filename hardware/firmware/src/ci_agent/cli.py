@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 import logging
+import logging.handlers
 import signal
 import sys
 from datetime import timedelta
@@ -14,6 +15,7 @@ from typing import Any
 
 from ci_agent.agent import Agent, AgentSettings
 from ci_agent.api import DeviceManagementApi, IngestionApi, register_device
+from ci_agent.commands import CommandDeps, CommandRunner, build_handlers, parse_command_line
 from ci_agent.config import AgentConfig, load_config
 from ci_agent.fsutil import atomic_write_json, read_json
 from ci_agent.identity import DeviceIdentity
@@ -89,7 +91,7 @@ def build_agent(config: AgentConfig, fake_audio: bool = False) -> Agent:
             return FakeSource(config.sample_rate, config.channels, realtime=True)
         return ArecordSource(config.audio_device, config.sample_rate, config.channels)
 
-    return Agent(
+    agent = Agent(
         AgentSettings(
             device_id=device_id,
             firmware_version=config.firmware_version,
@@ -117,6 +119,32 @@ def build_agent(config: AgentConfig, fake_audio: bool = False) -> Agent:
             backoff_max_s=config.upload_backoff_max_s,
         ),
     )
+    agent.commands = CommandRunner(
+        build_handlers(
+            CommandDeps(
+                data_dir=config.data_dir,
+                source_factory=source,
+                recorder_active=lambda: agent.recorder.active is not None,
+                before_reboot=agent.stop_recording_for_reboot,
+                upload_now=agent.upload_now,
+                refresh_plan=agent.refresh_plan_now,
+                clock_skew_ms=lambda: agent.clock_guard.skew_ms,
+                probe_urls={
+                    "deviceManagement": config.device_management_url,
+                    "ingestion": config.ingestion_url,
+                },
+                reboot_command=parse_command_line(config.reboot_command),
+                rotate_logs_command=parse_command_line(config.rotate_logs_command),
+                command_timeout_s=config.command_timeout_s,
+                self_test_capture_s=config.self_test_capture_s,
+                min_mic_dbfs=config.self_test_min_mic_dbfs,
+            )
+        ),
+        reporter=dm,
+        state_path=config.command_state_path,
+        clock=lambda: agent.now(),
+    )
+    return agent
 
 
 def cmd_run(config: AgentConfig, args: argparse.Namespace) -> int:
@@ -173,6 +201,12 @@ def main(argv: list[str] | None = None) -> int:
         stream=sys.stderr,
     )
     config = load_config(args.config)
+    if config.log_file:
+        handler = logging.handlers.RotatingFileHandler(
+            config.log_file, maxBytes=config.log_max_bytes, backupCount=config.log_backup_count
+        )
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+        logging.getLogger().addHandler(handler)
     handlers = {"init": cmd_init, "register": cmd_register, "run": cmd_run, "status": cmd_status}
     return handlers[args.command](config, args)
 

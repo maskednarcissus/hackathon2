@@ -7,6 +7,7 @@ export interface ClassroomInfo {
   timezone: string;
   name?: string;
   code?: string;
+  campusName?: string;
 }
 
 export interface OrganizationClient {

@@ -1,4 +1,11 @@
-import type { Device, DeviceAssignment, Heartbeat, ProvisioningToken } from './domain.js';
+import type {
+  CommandStatus,
+  Device,
+  DeviceAssignment,
+  DeviceCommand,
+  Heartbeat,
+  ProvisioningToken,
+} from './domain.js';
 
 export interface DeviceRepository {
   saveDevice(device: Device): Promise<void>;
@@ -18,6 +25,16 @@ export interface DeviceRepository {
   addHeartbeat(heartbeat: Heartbeat, retainPerDevice: number): Promise<void>;
   latestHeartbeat(deviceId: string): Promise<Heartbeat | undefined>;
   listHeartbeats(deviceId: string, limit: number): Promise<Heartbeat[]>;
+  /** Heartbeats received at or after `since`, oldest first. */
+  listHeartbeatsSince(deviceId: string, since: string): Promise<Heartbeat[]>;
+
+  saveCommand(command: DeviceCommand): Promise<void>;
+  getCommand(id: string): Promise<DeviceCommand | undefined>;
+  /** Newest first. */
+  listCommands(
+    filter: { deviceId?: string; statuses?: readonly CommandStatus[] },
+    limit?: number,
+  ): Promise<DeviceCommand[]>;
 }
 
 const clone = <T>(v: T): T => structuredClone(v);
@@ -27,6 +44,7 @@ export class InMemoryDeviceRepository implements DeviceRepository {
   private readonly tokens = new Map<string, ProvisioningToken>();
   private readonly assignments = new Map<string, DeviceAssignment>();
   private readonly heartbeats = new Map<string, Heartbeat[]>();
+  private readonly commands = new Map<string, DeviceCommand>();
 
   saveDevice(device: Device): Promise<void> {
     this.devices.set(device.id, clone(device));
@@ -103,6 +121,38 @@ export class InMemoryDeviceRepository implements DeviceRepository {
   listHeartbeats(deviceId: string, limit: number): Promise<Heartbeat[]> {
     return Promise.resolve(
       (this.heartbeats.get(deviceId) ?? []).slice(-limit).reverse().map(clone),
+    );
+  }
+
+  listHeartbeatsSince(deviceId: string, since: string): Promise<Heartbeat[]> {
+    return Promise.resolve(
+      (this.heartbeats.get(deviceId) ?? []).filter((h) => h.receivedAt >= since).map(clone),
+    );
+  }
+
+  saveCommand(command: DeviceCommand): Promise<void> {
+    this.commands.set(command.id, clone(command));
+    return Promise.resolve();
+  }
+  getCommand(id: string): Promise<DeviceCommand | undefined> {
+    const c = this.commands.get(id);
+    return Promise.resolve(c ? clone(c) : undefined);
+  }
+  listCommands(
+    filter: { deviceId?: string; statuses?: readonly CommandStatus[] },
+    limit = Number.POSITIVE_INFINITY,
+  ): Promise<DeviceCommand[]> {
+    return Promise.resolve(
+      [...this.commands.values()]
+        .reverse()
+        .filter(
+          (c) =>
+            (!filter.deviceId || c.deviceId === filter.deviceId) &&
+            (!filter.statuses || filter.statuses.includes(c.status)),
+        )
+        .sort((a, b) => b.issuedAt.localeCompare(a.issuedAt))
+        .slice(0, limit)
+        .map(clone),
     );
   }
 }

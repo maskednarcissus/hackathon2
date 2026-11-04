@@ -50,10 +50,8 @@ export function registerErrorHandler(app: FastifyInstance): void {
     });
   });
   app.setNotFoundHandler((request, reply) =>
-    reply
-      .status(404)
-      .send({
-        error: { code: 'route_not_found', message: `${request.method} ${request.url} not found` },
-      }),
+    reply.status(404).send({
+      error: { code: 'route_not_found', message: `${request.method} ${request.url} not found` },
+    }),
   );
 }

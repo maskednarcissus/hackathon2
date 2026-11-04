@@ -1,13 +1,30 @@
 import { randomUUID } from 'node:crypto';
-import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
-import type {
-  Campus,
-  Classroom,
-  HoldingCompany,
-  Institution,
-  PolicySource,
-  RecordingPolicy,
+import Fastify, {
+  type FastifyBaseLogger,
+  type FastifyInstance,
+  type FastifyServerOptions,
+} from 'fastify';
+import {
+  InMemoryAuditClient,
+  StaticRosterClient,
+  type AuditClient,
+  type RetentionTarget,
+  type RosterClient,
+} from './clients.js';
+import type { Clock, ServiceContext } from './context.js';
+import {
+  POLICY_CONTENT_FIELDS,
+  type Campus,
+  type Classroom,
+  type HoldingCompany,
+  type Institution,
+  type PolicyContent,
+  type PolicySource,
+  type RecordingPolicy,
+  type RecordingPolicyVersion,
 } from './domain.js';
+import { computeConsentStatus, registerGovernanceRoutes } from './governance.js';
+import { registerRetentionRoutes } from './retention.js';
 import { AppError, conflict, notFound, registerErrorHandler } from './errors.js';
 import { createInMemoryOrganizationRepository, type OrganizationRepository } from './repository.js';
 import {
@@ -22,22 +39,27 @@ import {
   InstitutionUpdate,
   ListQuery,
   RecordingPolicyCreate,
+  RecordingPolicyQuery,
   RecordingPolicyUpdate,
+  VersionParams,
 } from './schemas.js';
 
-export interface Clock {
-  now(): Date;
-}
+export type { Clock } from './context.js';
 
 export interface OrganizationDeps {
   repo: OrganizationRepository;
   clock: Clock;
   idGenerator: () => string;
+  audit: AuditClient;
+  roster: RosterClient;
+  retentionTargets: readonly RetentionTarget[];
 }
 
 export interface BuildAppOptions {
   deps?: Partial<OrganizationDeps>;
   logger?: FastifyServerOptions['logger'];
+  /** Pre-built pino logger (takes precedence over `logger`). */
+  loggerInstance?: FastifyBaseLogger;
 }
 
 /** Removes keys whose value is undefined; turns null into "delete the field". */
@@ -62,9 +84,14 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     repo: options.deps?.repo ?? createInMemoryOrganizationRepository(),
     clock: options.deps?.clock ?? { now: () => new Date() },
     idGenerator: options.deps?.idGenerator ?? randomUUID,
+    audit: options.deps?.audit ?? new InMemoryAuditClient(),
+    roster: options.deps?.roster ?? new StaticRosterClient(),
+    retentionTargets: options.deps?.retentionTargets ?? [],
   };
   const { repo, clock } = deps;
-  const app = Fastify({ logger: options.logger ?? false });
+  const app: FastifyInstance = options.loggerInstance
+    ? (Fastify({ loggerInstance: options.loggerInstance }) as unknown as FastifyInstance)
+    : Fastify({ logger: options.logger ?? false });
   registerErrorHandler(app);
 
   const now = (): string => clock.now().toISOString();
@@ -93,6 +120,67 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     const item = await repo.recordingPolicies.get(id);
     if (!item) throw notFound('Recording policy', id);
     return item;
+  };
+
+  const ctx: ServiceContext = {
+    repo,
+    clock,
+    idGenerator: deps.idGenerator,
+    audit: deps.audit,
+    roster: deps.roster,
+    retentionTargets: deps.retentionTargets,
+    requireInstitution,
+    requirePolicy,
+    defaultPolicy: async (institutionId) =>
+      (
+        await repo.recordingPolicies.list((p) => p.institutionId === institutionId && p.isDefault)
+      )[0],
+    recordAudit: (event) =>
+      deps.audit.record(event).catch((err: unknown) => {
+        app.log.warn({ err, action: event.action }, 'audit client threw');
+      }),
+  };
+
+  /** Snapshot of the content fields; versions are immutable copies of this. */
+  const contentOf = (p: RecordingPolicy): PolicyContent =>
+    Object.fromEntries(
+      POLICY_CONTENT_FIELDS.filter((f) => p[f] !== undefined).map((f) => [f, p[f]]),
+    ) as PolicyContent;
+
+  const createVersion = async (
+    policy: Omit<RecordingPolicy, 'currentVersion' | 'currentVersionId'>,
+    version: number,
+    changedFields: RecordingPolicyVersion['changedFields'],
+    createdBy: string | null,
+    changeReason: string | undefined,
+  ): Promise<RecordingPolicyVersion> => {
+    const record: RecordingPolicyVersion = {
+      id: deps.idGenerator(),
+      policyId: policy.id,
+      institutionId: policy.institutionId,
+      version,
+      content: contentOf({ ...policy, currentVersion: version, currentVersionId: '' }),
+      changedFields,
+      ...(changeReason ? { changeReason } : {}),
+      createdBy,
+      createdAt: now(),
+    };
+    await repo.recordingPolicyVersions.save(record);
+    await ctx.recordAudit({
+      tenantId: policy.institutionId,
+      actorId: createdBy,
+      actorType: createdBy ? 'admin' : 'system',
+      action: 'recording_policy.version_created',
+      resourceType: 'recording_policy',
+      resourceId: policy.id,
+      metadata: {
+        version,
+        versionId: record.id,
+        changedFields,
+        changeReason: changeReason ?? null,
+      },
+    });
+    return record;
   };
 
   /** A policy referenced by a campus/classroom must belong to the same institution (tenant isolation). */
@@ -300,9 +388,14 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   // ---------------------------------------------------------------- classrooms
   const classroomView = async (
     classroom: Classroom,
-  ): Promise<Classroom & { institutionId: string; timezone: string }> => {
+  ): Promise<Classroom & { institutionId: string; timezone: string; campusName: string }> => {
     const campus = await requireCampus(classroom.campusId);
-    return { ...classroom, institutionId: campus.institutionId, timezone: campus.timezone };
+    return {
+      ...classroom,
+      institutionId: campus.institutionId,
+      timezone: campus.timezone,
+      campusName: campus.name,
+    };
   };
 
   app.post('/v1/classrooms', async (request, reply) => {
@@ -375,6 +468,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
 
   app.get('/v1/classrooms/:id/recording-policy', async (request) => {
     const { id } = IdParams.parse(request.params);
+    const { classSectionId } = RecordingPolicyQuery.parse(request.query);
     const classroom = await requireClassroom(id);
     const campus = await requireCampus(classroom.campusId);
     let source: PolicySource | undefined;
@@ -400,13 +494,25 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
         `No recording policy applies to classroom ${id}; recording must not start`,
       );
     }
-    return {
+    const resolved = {
       classroomId: id,
       campusId: campus.id,
       institutionId: campus.institutionId,
       timezone: campus.timezone,
       source,
       policy,
+      policyVersion: policy.currentVersion,
+      policyVersionId: policy.currentVersionId,
+    };
+    if (!classSectionId) return resolved;
+    const consent = await computeConsentStatus(ctx, classSectionId, policy, {
+      consultRosterWhenNotRequired: false,
+    });
+    return {
+      ...resolved,
+      classSectionId,
+      consentSatisfied: consent.consentSatisfied,
+      consentStatus: consent,
     };
   });
 
@@ -431,15 +537,24 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
       throw conflict('duplicate_name', `Recording policy "${body.name}" already exists`);
     const existing = await repo.recordingPolicies.list((p) => p.institutionId === id);
     const ts = now();
-    const item: RecordingPolicy = stripUndefined({
+    const { actorId, ...fields } = body;
+    const draft = stripUndefined({
       id: deps.idGenerator(),
       institutionId: id,
-      ...body,
+      ...fields,
       // The first policy of an institution becomes its default automatically.
       isDefault: body.isDefault || existing.length === 0,
       createdAt: ts,
       updatedAt: ts,
     });
+    const version = await createVersion(
+      draft,
+      1,
+      [...POLICY_CONTENT_FIELDS],
+      actorId ?? null,
+      'created',
+    );
+    const item: RecordingPolicy = { ...draft, currentVersion: 1, currentVersionId: version.id };
     await repo.recordingPolicies.save(item);
     if (item.isDefault) await clearOtherDefaults(id, item.id);
     return reply.status(201).send(item);
@@ -462,13 +577,61 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
         'Set another policy as default instead of unsetting the current default',
       );
     }
-    const saved = await repo.recordingPolicies.save({
-      ...applyPatch(current, patch),
-      updatedAt: now(),
-    });
+    const { changeReason, actorId, ...fields } = patch;
+    if (fields.name !== undefined) {
+      const dup = await repo.recordingPolicies.list(
+        (p) =>
+          p.id !== id &&
+          p.institutionId === current.institutionId &&
+          sameName(p.name, fields.name ?? ''),
+      );
+      if (dup.length > 0)
+        throw conflict('duplicate_name', `Recording policy "${fields.name}" already exists`);
+    }
+    let next: RecordingPolicy = { ...applyPatch(current, fields), updatedAt: now() };
+    const changedFields = POLICY_CONTENT_FIELDS.filter((f) => next[f] !== current[f]);
+    if (changedFields.length > 0) {
+      // Policies are versioned: recordings keep pointing at the version that was in force.
+      const version = await createVersion(
+        next,
+        current.currentVersion + 1,
+        changedFields,
+        actorId ?? null,
+        changeReason,
+      );
+      next = { ...next, currentVersion: version.version, currentVersionId: version.id };
+    }
+    const saved = await repo.recordingPolicies.save(next);
     if (saved.isDefault) await clearOtherDefaults(saved.institutionId, saved.id);
     return saved;
   });
+
+  app.get('/v1/recording-policies/:id/versions', async (request) => {
+    const { id } = IdParams.parse(request.params);
+    await requirePolicy(id);
+    const items = await repo.recordingPolicyVersions.list((v) => v.policyId === id);
+    return { items: items.sort((a, b) => b.version - a.version) };
+  });
+
+  app.get('/v1/recording-policies/:id/versions/:version', async (request) => {
+    const { id, version } = VersionParams.parse(request.params);
+    await requirePolicy(id);
+    const [item] = await repo.recordingPolicyVersions.list(
+      (v) => v.policyId === id && v.version === version,
+    );
+    if (!item) throw notFound('Recording policy version', `${id}@${version}`);
+    return item;
+  });
+
+  app.get('/v1/recording-policy-versions/:id', async (request) => {
+    const { id } = IdParams.parse(request.params);
+    const item = await repo.recordingPolicyVersions.get(id);
+    if (!item) throw notFound('Recording policy version', id);
+    return item;
+  });
+
+  registerGovernanceRoutes(app, ctx);
+  registerRetentionRoutes(app, ctx);
 
   return app;
 }

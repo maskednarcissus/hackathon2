@@ -18,6 +18,8 @@ export const INSTITUTION_B = '22222222-2222-4222-8222-222222222222';
 export const ROOM_A1 = 'aaaaaaaa-0000-4000-8000-000000000001';
 export const ROOM_A2 = 'aaaaaaaa-0000-4000-8000-000000000002';
 export const ROOM_B1 = 'bbbbbbbb-0000-4000-8000-000000000001';
+export const CAMPUS_1 = 'dddddddd-0000-4000-8000-000000000001';
+export const CAMPUS_2 = 'dddddddd-0000-4000-8000-000000000002';
 export const ADMIN_TOKEN = 'test-admin-token';
 export const ADMIN_ID = 'cccccccc-0000-4000-8000-000000000001';
 
@@ -25,15 +27,39 @@ export class FakeOrganizationClient implements OrganizationClient {
   readonly rooms = new Map<string, ClassroomInfo>([
     [
       ROOM_A1,
-      { id: ROOM_A1, campusId: 'c1', institutionId: INSTITUTION_A, timezone: 'America/Sao_Paulo' },
+      {
+        id: ROOM_A1,
+        campusId: CAMPUS_1,
+        institutionId: INSTITUTION_A,
+        timezone: 'America/Sao_Paulo',
+        name: 'Sala 101',
+        code: 'A-101',
+        campusName: 'Campus Paulista',
+      },
     ],
     [
       ROOM_A2,
-      { id: ROOM_A2, campusId: 'c1', institutionId: INSTITUTION_A, timezone: 'America/Sao_Paulo' },
+      {
+        id: ROOM_A2,
+        campusId: CAMPUS_1,
+        institutionId: INSTITUTION_A,
+        timezone: 'America/Sao_Paulo',
+        name: 'Laboratório 2',
+        code: 'LAB-2',
+        campusName: 'Campus Paulista',
+      },
     ],
     [
       ROOM_B1,
-      { id: ROOM_B1, campusId: 'c2', institutionId: INSTITUTION_B, timezone: 'America/Recife' },
+      {
+        id: ROOM_B1,
+        campusId: CAMPUS_2,
+        institutionId: INSTITUTION_B,
+        timezone: 'America/Recife',
+        name: 'Auditório',
+        code: 'AUD',
+        campusName: 'Campus Recife',
+      },
     ],
   ]);
   getClassroom(id: string): Promise<ClassroomInfo | null> {
@@ -73,13 +99,14 @@ export interface Harness extends DeviceManagementApp {
   schedule: FakeScheduleClient;
 }
 
-export function createHarness(): Harness {
+export function createHarness(options: { maxOpenCommandsPerDevice?: number } = {}): Harness {
   const clock = new MutableClock();
   const audit = new InMemoryAuditClient();
   const events = new InMemoryEventPublisher();
   const repo = new InMemoryDeviceRepository();
   const schedule = new FakeScheduleClient();
   const built = buildApp({
+    ...options,
     adminToken: ADMIN_TOKEN,
     deps: {
       clock,

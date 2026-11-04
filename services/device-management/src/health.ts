@@ -45,7 +45,8 @@ export function deriveHealth(
     if (latest.diskFreeBytes < HEALTH_THRESHOLDS.lowDiskBytes) issues.push('low_disk');
     if (latest.cpuTempC !== undefined && latest.cpuTempC > HEALTH_THRESHOLDS.highTemperatureC)
       issues.push('high_temperature');
-    if (Math.abs(latest.clockSkewMs ?? 0) > HEALTH_THRESHOLDS.maxClockSkewMs) issues.push('clock_skew');
+    if (Math.abs(latest.clockSkewMs ?? 0) > HEALTH_THRESHOLDS.maxClockSkewMs)
+      issues.push('clock_skew');
     if ((latest.evictedRecordings ?? 0) > 0) issues.push('recordings_evicted');
     if (latest.bufferQueueCount > HEALTH_THRESHOLDS.uploadBacklogCount)
       issues.push('upload_backlog');

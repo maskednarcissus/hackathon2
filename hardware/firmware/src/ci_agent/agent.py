@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 
+from ci_agent.commands import CommandRunner
 from ci_agent.heartbeat import HeartbeatContext, build_heartbeat
 from ci_agent.recorder import Recorder
 from ci_agent.scheduler import ClockGuard, DesiredState, PlanStore, RecordingPlan, desired_state
@@ -57,8 +59,12 @@ class Agent:
         recorder: Recorder,
         uploader: Uploader,
         clock: Callable[[], datetime] = utcnow,
+        commands: CommandRunner | None = None,
     ) -> None:
         self.settings = settings
+        self.commands = commands
+        self._upload_lock = threading.Lock()
+        self._plan_lock = threading.Lock()
         self.plan_client = plan_client
         self.event_client = event_client
         self.plans = plans
@@ -77,6 +83,10 @@ class Agent:
 
     # --------------------------------------------------------------- plan
     def refresh_plan(self, force: bool = False) -> bool:
+        with self._plan_lock:
+            return self._refresh_plan(force)
+
+    def _refresh_plan(self, force: bool) -> bool:
         local_now = self.clock()
         if not force and not self.plans.needs_refresh(local_now):
             return False
@@ -158,12 +168,24 @@ class Agent:
         if not (force or due):
             return False
         try:
-            self.plan_client.heartbeat(self.heartbeat_payload())
+            response = self.plan_client.heartbeat(self.heartbeat_payload())
             self.last_heartbeat_at = now
-            return True
         except Exception as exc:
             log.warning("heartbeat failed: %s", exc)
             return False
+        if self.commands is not None:
+            commands = response.get("commands") if isinstance(response, dict) else None
+            if isinstance(commands, list):
+                self.commands.submit(c for c in commands if isinstance(c, dict))
+        return True
+
+    # --------------------------------------------------------------- commands
+    def process_commands(self) -> int:
+        """Retry unreported results, then run queued commands one at a time."""
+        if self.commands is None:
+            return 0
+        self.commands.flush_outbox()
+        return self.commands.run_pending()
 
     # --------------------------------------------------------------- upload
     def upload(self, force: bool = False) -> None:
@@ -173,16 +195,44 @@ class Agent:
         )
         if not (force or due):
             return
-        self.last_upload_at = now
-        self.uploader.upload_pending()
-        self.spool.purge_uploaded(now, self.settings.uploaded_retention)
-        self.spool.enforce_quota()
+        with self._upload_lock:  # the upload loop and `upload_now` never overlap
+            self.last_upload_at = now
+            self.uploader.upload_pending()
+            self.spool.purge_uploaded(now, self.settings.uploaded_retention)
+            self.spool.enforce_quota()
+
+    def upload_now(self) -> dict[str, Any]:
+        """``upload_now`` command: an immediate upload cycle."""
+        before = self.spool.stats()
+        self.upload(force=True)
+        after = self.spool.stats()
+        return {
+            "queuedBefore": before.queued_recordings,
+            "queuedAfter": after.queued_recordings,
+            "queuedBytesAfter": after.queued_bytes,
+        }
+
+    def refresh_plan_now(self) -> tuple[bool, str | None]:
+        """``refresh_plan`` command."""
+        ok = self.refresh_plan(force=True)
+        return ok, None if ok else self.last_error
+
+    def stop_recording_for_reboot(self) -> None:
+        finished = self.recorder.stop()
+        if finished:
+            self._event(
+                "recording.stopped",
+                finished.local_recording_id,
+                finished.scheduled_class_id,
+                self.now(),
+            )
 
     def tick(self) -> None:
         """One synchronous iteration (used by tests and the async loop)."""
         self.refresh_plan()
         self.reconcile()
         self.send_heartbeat()
+        self.process_commands()
         self.upload()
 
     # --------------------------------------------------------------- async
@@ -204,6 +254,7 @@ class Agent:
             asyncio.create_task(loop(self.reconcile, self.settings.reconcile_interval_s)),
             asyncio.create_task(loop(self.send_heartbeat, 5.0)),
             asyncio.create_task(loop(self.upload, 5.0)),
+            asyncio.create_task(loop(self.process_commands, 1.0)),
         ]
         await stop.wait()
         await asyncio.gather(*tasks)

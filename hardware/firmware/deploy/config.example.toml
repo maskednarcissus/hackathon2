@@ -18,3 +18,12 @@ uploaded_retention_hours = 24
 spool_soft_limit_bytes = 21474836480   # 20 GiB: delete uploaded audio above this
 spool_hard_limit_bytes = 30064771072   # 28 GiB: only then evict un-uploaded audio
 max_clock_skew_s = 120
+# Remote commands (phase 4)
+reboot_command = "systemctl reboot"   # needs deploy/50-ci-agent.rules (polkit)
+rotate_logs_command = ""              # optional extra command run by `rotate_logs`
+command_timeout_s = 60
+self_test_capture_s = 2               # microphone capture length for `self_test`
+self_test_min_mic_dbfs = -60          # quieter than this = microphone check fails
+log_file = ""                         # e.g. "/var/lib/ci-agent/logs/agent.log" (rotating)
+log_max_bytes = 10485760
+log_backup_count = 5

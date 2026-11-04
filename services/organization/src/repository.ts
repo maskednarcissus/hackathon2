@@ -1,4 +1,14 @@
-import type { Campus, Classroom, HoldingCompany, Institution, RecordingPolicy } from './domain.js';
+import type {
+  Campus,
+  Classroom,
+  Consent,
+  HoldingCompany,
+  Institution,
+  LegalHold,
+  RecordingPolicy,
+  RecordingPolicyVersion,
+  RetentionJob,
+} from './domain.js';
 
 export interface Table<T extends { id: string }> {
   get(id: string): Promise<T | undefined>;
@@ -13,6 +23,11 @@ export interface OrganizationRepository {
   campuses: Table<Campus>;
   classrooms: Table<Classroom>;
   recordingPolicies: Table<RecordingPolicy>;
+  /** Append-only: versions are never updated or deleted. */
+  recordingPolicyVersions: Table<RecordingPolicyVersion>;
+  consents: Table<Consent>;
+  legalHolds: Table<LegalHold>;
+  retentionJobs: Table<RetentionJob>;
 }
 
 export class InMemoryTable<T extends { id: string }> implements Table<T> {
@@ -45,5 +60,9 @@ export function createInMemoryOrganizationRepository(): OrganizationRepository {
     campuses: new InMemoryTable<Campus>(),
     classrooms: new InMemoryTable<Classroom>(),
     recordingPolicies: new InMemoryTable<RecordingPolicy>(),
+    recordingPolicyVersions: new InMemoryTable<RecordingPolicyVersion>(),
+    consents: new InMemoryTable<Consent>(),
+    legalHolds: new InMemoryTable<LegalHold>(),
+    retentionJobs: new InMemoryTable<RetentionJob>(),
   };
 }

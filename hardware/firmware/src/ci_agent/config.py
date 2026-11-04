@@ -38,6 +38,16 @@ class AgentConfig:
     spool_hard_limit_bytes: int = 28 * GIB
     max_clock_skew_s: float = 120.0
     http_timeout_s: float = 30.0
+    # Remote commands (phase 4). Rebooting needs a polkit rule (deploy/50-ci-agent.rules).
+    reboot_command: str = "systemctl reboot"
+    rotate_logs_command: str = ""
+    command_timeout_s: float = 60.0
+    self_test_capture_s: float = 2.0
+    self_test_min_mic_dbfs: float = -60.0
+    # Optional rotating file log in addition to stderr/journald ("" = disabled).
+    log_file: str = ""
+    log_max_bytes: int = 10 * MIB
+    log_backup_count: int = 5
 
     @property
     def identity_dir(self) -> Path:
@@ -58,6 +68,10 @@ class AgentConfig:
     @property
     def plan_cache_path(self) -> Path:
         return self.data_dir / "plan-cache.json"
+
+    @property
+    def command_state_path(self) -> Path:
+        return self.data_dir / "commands.json"
 
 
 def _coerce(name: str, raw: Any) -> Any:

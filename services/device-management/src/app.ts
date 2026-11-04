@@ -10,6 +10,7 @@ import {
   InMemoryEventPublisher,
   UpstreamError,
   type AuditClient,
+  type ClassroomInfo,
   type AuditEventInput,
   type EventPublisher,
   type OrganizationClient,
@@ -27,11 +28,23 @@ import {
 } from './crypto.js';
 import {
   DEVICE_STATUSES,
+  OPEN_COMMAND_STATUSES,
   type Device,
+  type DeviceCommand,
   type DeviceStatus,
   type Heartbeat,
   type ProvisioningToken,
 } from './domain.js';
+import {
+  backlogTrend,
+  certificateReport,
+  commandView,
+  compareVersions,
+  computeUptime,
+  firmwareDistribution,
+  firmwareHistory,
+  type FleetRow,
+} from './fleet.js';
 import {
   AppError,
   conflict,
@@ -44,6 +57,14 @@ import { deriveHealth } from './health.js';
 import { InMemoryDeviceRepository, type DeviceRepository } from './repository.js';
 import {
   AssignDevice,
+  CommandCancel,
+  CommandCreate,
+  CommandListQuery,
+  CommandParams,
+  CommandResult,
+  DiagnosticsQuery,
+  FirmwareQuery,
+  FleetConsoleQuery,
   FleetQuery,
   HealthQuery,
   HeartbeatBody,
@@ -77,6 +98,10 @@ export interface BuildAppOptions {
   adminToken?: string;
   certificateValidityDays?: number;
   heartbeatRetention?: number;
+  /** Nominal firmware heartbeat interval, used for missed-heartbeat counts (default 60 s). */
+  heartbeatIntervalSeconds?: number;
+  /** Open (pending/delivered) commands allowed per device (default 10). */
+  maxOpenCommandsPerDevice?: number;
   logger?: FastifyServerOptions['logger'];
   /** Pre-built pino logger (takes precedence over `logger`). */
   loggerInstance?: FastifyBaseLogger;
@@ -85,6 +110,7 @@ export interface BuildAppOptions {
 export interface SweepResult {
   checked: number;
   transitions: { deviceId: string; from: DeviceStatus; to: DeviceStatus }[];
+  expiredCommands: number;
 }
 
 export interface DeviceManagementApp {
@@ -111,6 +137,8 @@ export function buildApp(options: BuildAppOptions): DeviceManagementApp {
   const { repo, clock } = deps;
   const certificateValidityDays = options.certificateValidityDays ?? 365;
   const heartbeatRetention = options.heartbeatRetention ?? 1440;
+  const heartbeatIntervalSeconds = options.heartbeatIntervalSeconds ?? 60;
+  const maxOpenCommands = options.maxOpenCommandsPerDevice ?? 10;
 
   const app: FastifyInstance = options.loggerInstance
     ? (Fastify({
@@ -204,8 +232,7 @@ export function buildApp(options: BuildAppOptions): DeviceManagementApp {
   };
 
   const deviceView = (d: Device): Omit<Device, 'publicKeyPem' | 'certificate'> => {
-    const { publicKeyPem: _pk, certificate: _cert, ...rest } = d;
-    return rest;
+    return omit(d, ['publicKeyPem', 'certificate']);
   };
 
   const healthRow = async (device: Device): Promise<Record<string, unknown>> => {
@@ -463,8 +490,7 @@ export function buildApp(options: BuildAppOptions): DeviceManagementApp {
       unassignedAt: ts,
       unassignedBy: actorOf(request) ?? 'system',
     });
-    const { classroomId: _c, ...rest } = device;
-    await repo.saveDevice({ ...rest, updatedAt: ts });
+    await repo.saveDevice({ ...omit(device, ['classroomId']), updatedAt: ts });
     await audit({
       tenantId: device.institutionId,
       actorId: actorOf(request),
@@ -522,9 +548,8 @@ export function buildApp(options: BuildAppOptions): DeviceManagementApp {
         unassignedAt: ts,
         unassignedBy: actorOf(request) ?? 'system',
       });
-    const { classroomId: _c, ...rest } = device;
     const updated: Device = {
-      ...rest,
+      ...omit(device, ['classroomId']),
       credentialStatus: 'decommissioned',
       status: 'decommissioned',
       revokedAt: device.revokedAt ?? ts,
@@ -608,12 +633,19 @@ export function buildApp(options: BuildAppOptions): DeviceManagementApp {
     await repo.saveDevice(updated);
     await transition(updated);
     const health = deriveHealth(updated, heartbeat, clock.now());
+    const commands = await deliverCommands(id);
     return {
       status: health.status,
       issues: health.issues,
       serverTime: receivedAt,
       classroomId: device.classroomId ?? null,
       certificateExpiresAt: device.certificateExpiresAt,
+      commands: commands.map((c) => ({
+        commandId: c.id,
+        type: c.type,
+        issuedAt: c.issuedAt,
+        expiresAt: c.expiresAt,
+      })),
     };
   });
 
@@ -672,8 +704,367 @@ export function buildApp(options: BuildAppOptions): DeviceManagementApp {
     }
   });
 
+  // ------------------------------------------------------------------ 4.7 remote commands
+  /** Marks an open command past its expiry as expired (audited). Returns true when it expired. */
+  async function expireIfDue(command: DeviceCommand): Promise<boolean> {
+    if (!OPEN_COMMAND_STATUSES.includes(command.status)) return false;
+    if (Date.parse(command.expiresAt) > clock.now().getTime()) return false;
+    await repo.saveCommand({ ...command, status: 'expired' });
+    await audit({
+      tenantId: command.institutionId,
+      actorId: null,
+      actorType: 'system',
+      action: 'device.command_expired',
+      resourceType: 'device_command',
+      resourceId: command.id,
+      metadata: {
+        deviceId: command.deviceId,
+        type: command.type,
+        delivered: Boolean(command.deliveredAt),
+      },
+    });
+    return true;
+  }
+
+  /** Open, unexpired commands for a device, oldest first. */
+  async function openCommands(deviceId: string): Promise<DeviceCommand[]> {
+    const open = await repo.listCommands({ deviceId, statuses: OPEN_COMMAND_STATUSES });
+    const live: DeviceCommand[] = [];
+    for (const c of open) if (!(await expireIfDue(c))) live.push(c);
+    return live.reverse();
+  }
+
+  /**
+   * Hands every open command to the device. Delivered-but-unanswered commands are re-sent until
+   * they expire (the heartbeat response may have been lost); the device de-duplicates by id.
+   */
+  async function deliverCommands(deviceId: string): Promise<DeviceCommand[]> {
+    const ts = nowIso();
+    const live = await openCommands(deviceId);
+    const delivered: DeviceCommand[] = [];
+    for (const c of live) {
+      const next: DeviceCommand = {
+        ...c,
+        status: 'delivered',
+        deliveredAt: c.deliveredAt ?? ts,
+        deliveryCount: c.deliveryCount + 1,
+      };
+      await repo.saveCommand(next);
+      delivered.push(next);
+    }
+    return delivered;
+  }
+
+  const requireCommand = async (deviceId: string, commandId: string): Promise<DeviceCommand> => {
+    const command = await repo.getCommand(commandId);
+    if (!command || command.deviceId !== deviceId) throw notFound('Command', commandId);
+    return command;
+  };
+
+  app.post('/v1/devices/:id/commands', { preHandler: requireAdmin }, async (request, reply) => {
+    const { id } = IdParams.parse(request.params);
+    const body = CommandCreate.parse(request.body);
+    const device = await requireDevice(id);
+    if (device.credentialStatus !== 'active') {
+      throw conflict('device_not_active', `Cannot command a ${device.credentialStatus} device`);
+    }
+    const open = await openCommands(id);
+    const duplicate = open.find((c) => c.type === body.type);
+    if (duplicate) {
+      // Idempotent: a second request for the same open command returns the existing one.
+      return reply.status(202).send({
+        commandId: duplicate.id,
+        status: duplicate.status,
+        expiresAt: duplicate.expiresAt,
+        deduplicated: true,
+      });
+    }
+    if (open.length >= maxOpenCommands) {
+      throw new AppError(
+        429,
+        'too_many_commands',
+        `Device already has ${open.length} open commands`,
+      );
+    }
+    const now = clock.now();
+    const command: DeviceCommand = {
+      id: deps.idGenerator(),
+      deviceId: id,
+      institutionId: device.institutionId,
+      type: body.type,
+      status: 'pending',
+      requestedBy: body.requestedBy,
+      issuedAt: now.toISOString(),
+      expiresAt: new Date(now.getTime() + body.ttlMinutes * 60_000).toISOString(),
+      deliveryCount: 0,
+    };
+    await repo.saveCommand(command);
+    await audit({
+      tenantId: device.institutionId,
+      actorId: body.requestedBy,
+      actorType: 'admin',
+      action: 'device.command_issued',
+      resourceType: 'device_command',
+      resourceId: command.id,
+      metadata: { deviceId: id, type: body.type, expiresAt: command.expiresAt },
+    });
+    return reply
+      .status(202)
+      .send({ commandId: command.id, status: command.status, expiresAt: command.expiresAt });
+  });
+
+  app.get('/v1/devices/:id/commands', { preHandler: requireAdmin }, async (request) => {
+    const { id } = IdParams.parse(request.params);
+    const q = CommandListQuery.parse(request.query);
+    await requireDevice(id);
+    for (const c of await repo.listCommands({ deviceId: id, statuses: OPEN_COMMAND_STATUSES }))
+      await expireIfDue(c);
+    const items = await repo.listCommands(
+      { deviceId: id, ...(q.status ? { statuses: [q.status] } : {}) },
+      q.limit,
+    );
+    return { items: items.map(commandView) };
+  });
+
+  app.get('/v1/devices/:id/commands/:commandId', { preHandler: requireAdmin }, async (request) => {
+    const { id, commandId } = CommandParams.parse(request.params);
+    const command = await requireCommand(id, commandId);
+    await expireIfDue(command);
+    return commandView((await repo.getCommand(commandId)) ?? command);
+  });
+
+  app.post(
+    '/v1/devices/:id/commands/:commandId/cancel',
+    { preHandler: requireAdmin },
+    async (request) => {
+      const { id, commandId } = CommandParams.parse(request.params);
+      const body = CommandCancel.parse(request.body ?? {});
+      const command = await requireCommand(id, commandId);
+      if ((await expireIfDue(command)) || !OPEN_COMMAND_STATUSES.includes(command.status)) {
+        const current = (await repo.getCommand(commandId)) ?? command;
+        throw conflict('command_not_open', `Command is ${current.status}`);
+      }
+      const actor = body.actorId ?? actorOf(request);
+      const updated: DeviceCommand = {
+        ...command,
+        status: 'cancelled',
+        cancelledAt: nowIso(),
+        ...(actor ? { cancelledBy: actor } : {}),
+      };
+      await repo.saveCommand(updated);
+      await audit({
+        tenantId: command.institutionId,
+        actorId: actor,
+        actorType: 'admin',
+        action: 'device.command_cancelled',
+        resourceType: 'device_command',
+        resourceId: commandId,
+        metadata: { deviceId: id, type: command.type, wasDelivered: Boolean(command.deliveredAt) },
+      });
+      return commandView(updated);
+    },
+  );
+
+  app.post(
+    '/v1/devices/:id/commands/:commandId/result',
+    { preHandler: deviceAuth },
+    async (request) => {
+      const { id, commandId } = CommandParams.parse(request.params);
+      const body = CommandResult.parse(request.body);
+      const command = await requireCommand(id, commandId);
+      if (command.status === 'succeeded' || command.status === 'failed') {
+        if (command.status === body.status && command.finishedAt === body.finishedAt) {
+          return commandView(command); // retried report
+        }
+        throw conflict('command_already_finished', `Command already ${command.status}`);
+      }
+      if (command.status === 'cancelled')
+        throw conflict('command_cancelled', 'Command was cancelled');
+      if (!command.deliveredAt) {
+        throw conflict('command_not_delivered', 'Command was never delivered to this device');
+      }
+      // A delivered command may finish after expiry (e.g. a slow self-test); its result is kept.
+      if (Date.parse(body.finishedAt) > clock.now().getTime() + 300_000) {
+        throw new AppError(400, 'invalid_finished_at', 'finishedAt is in the future');
+      }
+      const updated: DeviceCommand = {
+        ...command,
+        status: body.status,
+        finishedAt: body.finishedAt,
+        resultReceivedAt: nowIso(),
+        ...(body.output !== undefined ? { output: body.output } : {}),
+      };
+      await repo.saveCommand(updated);
+      await audit({
+        tenantId: command.institutionId,
+        actorId: id,
+        actorType: 'device',
+        action: 'device.command_completed',
+        resourceType: 'device_command',
+        resourceId: commandId,
+        metadata: {
+          deviceId: id,
+          type: command.type,
+          status: body.status,
+          finishedAt: body.finishedAt,
+        },
+      });
+      return commandView(updated);
+    },
+  );
+
+  // ------------------------------------------------------------------ 4.7 fleet console
+  app.get('/v1/fleet', { preHandler: requireAdmin }, async (request) => {
+    const q = FleetConsoleQuery.parse(request.query);
+    const devices = await repo.listDevices(
+      q.institutionId ? { institutionId: q.institutionId } : {},
+    );
+    const rooms = new Map<string, ClassroomInfo | null>();
+    let namesUnavailable = false;
+    const roomOf = async (classroomId: string | undefined): Promise<ClassroomInfo | null> => {
+      if (!classroomId) return null;
+      if (!rooms.has(classroomId)) {
+        try {
+          rooms.set(classroomId, await deps.organization.getClassroom(classroomId));
+        } catch (err) {
+          namesUnavailable = true;
+          app.log.warn({ err, classroomId }, 'classroom lookup failed; names omitted');
+          rooms.set(classroomId, null);
+        }
+      }
+      return rooms.get(classroomId) ?? null;
+    };
+
+    const rows: FleetRow[] = [];
+    for (const device of devices) {
+      const latest = await repo.latestHeartbeat(device.id);
+      const health = deriveHealth(device, latest, clock.now());
+      const room = await roomOf(device.classroomId);
+      rows.push({
+        deviceId: device.id,
+        serialNumber: device.serialNumber,
+        model: device.model,
+        firmwareVersion: device.firmwareVersion,
+        institutionId: device.institutionId,
+        status: health.status,
+        issues: health.issues,
+        lastSeenAt: device.lastSeenAt ?? null,
+        classroom: device.classroomId
+          ? { id: device.classroomId, name: room?.name ?? null, code: room?.code ?? null }
+          : null,
+        campus: room ? { id: room.campusId, name: room.campusName ?? null } : null,
+        metrics: latest
+          ? {
+              diskFreeBytes: latest.diskFreeBytes,
+              bufferQueueCount: latest.bufferQueueCount,
+              cpuTempC: latest.cpuTempC ?? null,
+              isRecording: latest.isRecording,
+            }
+          : null,
+        openCommands: (
+          await repo.listCommands({ deviceId: device.id, statuses: OPEN_COMMAND_STATUSES })
+        ).length,
+      });
+    }
+
+    const needle = q.q?.toLocaleLowerCase('pt-BR');
+    const matches = rows.filter(
+      (r) =>
+        (!q.campusId || r.campus?.id === q.campusId) &&
+        (!q.firmwareVersion || r.firmwareVersion === q.firmwareVersion) &&
+        (!needle ||
+          [r.serialNumber, r.model, r.classroom?.name, r.classroom?.code, r.campus?.name]
+            .filter((v): v is string => typeof v === 'string')
+            .some((v) => v.toLocaleLowerCase('pt-BR').includes(needle))),
+    );
+    const byStatus = Object.fromEntries(DEVICE_STATUSES.map((st) => [st, 0])) as Record<
+      DeviceStatus,
+      number
+    >;
+    for (const r of matches) byStatus[r.status] += 1;
+    const filtered = q.status ? matches.filter((r) => r.status === q.status) : matches;
+
+    const desc = q.sort.startsWith('-');
+    const field = desc ? q.sort.slice(1) : q.sort;
+    const key = (r: FleetRow): string => {
+      switch (field) {
+        case 'status':
+          return String(DEVICE_STATUSES.indexOf(r.status)).padStart(2, '0');
+        case 'lastSeenAt':
+          return r.lastSeenAt ?? '';
+        case 'classroom':
+          return r.classroom?.name ?? r.classroom?.code ?? '';
+        case 'campus':
+          return r.campus?.name ?? '';
+        default:
+          return r.serialNumber;
+      }
+    };
+    filtered.sort((a, b) => {
+      const cmp =
+        field === 'firmwareVersion'
+          ? compareVersions(a.firmwareVersion, b.firmwareVersion)
+          : key(a).localeCompare(key(b), 'pt-BR');
+      return (desc ? -cmp : cmp) || a.serialNumber.localeCompare(b.serialNumber);
+    });
+
+    const total = filtered.length;
+    const start = (q.page - 1) * q.pageSize;
+    return {
+      generatedAt: nowIso(),
+      page: q.page,
+      pageSize: q.pageSize,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / q.pageSize)),
+      summary: { total: matches.length, byStatus },
+      namesUnavailable,
+      items: filtered.slice(start, start + q.pageSize),
+    };
+  });
+
+  app.get('/v1/fleet/firmware', { preHandler: requireAdmin }, async (request) => {
+    const q = FirmwareQuery.parse(request.query);
+    const devices = await repo.listDevices(
+      q.institutionId ? { institutionId: q.institutionId } : {},
+    );
+    return firmwareDistribution(devices, clock.now());
+  });
+
+  app.get('/v1/devices/:id/diagnostics', { preHandler: requireAdmin }, async (request) => {
+    const { id } = IdParams.parse(request.params);
+    const { windowHours } = DiagnosticsQuery.parse(request.query);
+    const device = await requireDevice(id);
+    const now = clock.now();
+    const since = new Date(now.getTime() - windowHours * 3_600_000 - 3_600_000).toISOString();
+    const heartbeats = await repo.listHeartbeatsSince(id, since);
+    const latest = await repo.latestHeartbeat(id);
+    const health = deriveHealth(device, latest, now);
+    for (const c of await repo.listCommands({ deviceId: id, statuses: OPEN_COMMAND_STATUSES }))
+      await expireIfDue(c);
+    return {
+      deviceId: device.id,
+      serialNumber: device.serialNumber,
+      model: device.model,
+      institutionId: device.institutionId,
+      classroomId: device.classroomId ?? null,
+      status: health.status,
+      issues: health.issues,
+      lastSeenAt: device.lastSeenAt ?? null,
+      latestHeartbeat: latest ? { receivedAt: latest.receivedAt, ...metricsOf(latest) } : null,
+      uptime: computeUptime(heartbeats, device, now, windowHours, heartbeatIntervalSeconds),
+      backlogTrend: backlogTrend(heartbeats, now, windowHours),
+      firmware: { current: device.firmwareVersion, history: firmwareHistory(heartbeats) },
+      certificate: certificateReport(device, now),
+      lastCommands: (await repo.listCommands({ deviceId: id }, 10)).map(commandView),
+    };
+  });
+
   // ------------------------------------------------------------------ status sweep
   async function sweepStatuses(): Promise<SweepResult> {
+    let expiredCommands = 0;
+    for (const command of await repo.listCommands({ statuses: OPEN_COMMAND_STATUSES })) {
+      if (await expireIfDue(command)) expiredCommands += 1;
+    }
     const devices = await repo.listDevices();
     const transitions: SweepResult['transitions'] = [];
     for (const device of devices) {
@@ -689,7 +1080,7 @@ export function buildApp(options: BuildAppOptions): DeviceManagementApp {
         });
       }
     }
-    return { checked: devices.length, transitions };
+    return { checked: devices.length, transitions, expiredCommands };
   }
 
   app.post('/internal/v1/status-sweep', async () => sweepStatuses());
@@ -710,8 +1101,13 @@ function upstream(err: unknown): AppError {
 }
 
 function metricsOf(h: Heartbeat): Record<string, unknown> {
-  const { id: _id, deviceId: _d, receivedAt: _r, ...metrics } = h;
-  return metrics;
+  return omit(h, ['id', 'deviceId', 'receivedAt']);
+}
+
+export function omit<T extends object, K extends keyof T>(obj: T, keys: readonly K[]): Omit<T, K> {
+  const copy: Partial<T> = { ...obj };
+  for (const key of keys) delete copy[key];
+  return copy as Omit<T, K>;
 }
 
 type Defined<T> = { [K in keyof T]: Exclude<T[K], undefined> };

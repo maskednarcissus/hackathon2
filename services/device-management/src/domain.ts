@@ -102,3 +102,37 @@ export type HealthIssue =
   | 'certificate_revoked'
   | 'clock_skew'
   | 'recordings_evicted';
+
+export const COMMAND_TYPES = [
+  'reboot',
+  'self_test',
+  'upload_now',
+  'refresh_plan',
+  'rotate_logs',
+] as const;
+export type CommandType = (typeof COMMAND_TYPES)[number];
+
+export type CommandStatus =
+  'pending' | 'delivered' | 'succeeded' | 'failed' | 'expired' | 'cancelled';
+
+export const OPEN_COMMAND_STATUSES: readonly CommandStatus[] = ['pending', 'delivered'];
+
+export interface DeviceCommand {
+  id: string;
+  deviceId: string;
+  institutionId: string;
+  type: CommandType;
+  status: CommandStatus;
+  requestedBy: string;
+  issuedAt: string;
+  expiresAt: string;
+  /** First time the command was handed to the device in a heartbeat response. */
+  deliveredAt?: string;
+  deliveryCount: number;
+  /** Device-reported completion time. */
+  finishedAt?: string;
+  resultReceivedAt?: string;
+  output?: unknown;
+  cancelledAt?: string;
+  cancelledBy?: string;
+}

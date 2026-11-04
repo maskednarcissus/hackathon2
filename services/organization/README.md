@@ -46,3 +46,69 @@ Errors always use `{ "error": { "code", "message", "details?" } }`.
 pnpm --filter @ci/organization-service dev    # PORT=4002
 pnpm --filter @ci/organization-service test
 ```
+
+## Phase 4 — recording governance (4.10, 4.12)
+
+Contract: [`docs/architecture/phase-4-institutional-intelligence.md`](../../docs/architecture/phase-4-institutional-intelligence.md) §5.
+
+### Policy versions
+
+Creating a policy stores **version 1**; every `PATCH /v1/recording-policies/:id` that changes a content
+field (`name, description, legalBasis, requiresExplicitConsent, *RetentionDays, allowRawAudioAccess,
+preRollMinutes, postRollMinutes, recordingEnabled`) appends an immutable version
+(`changedFields`, optional `changeReason`, `actorId`). `isDefault` and no-op patches do not.
+Policies expose `currentVersion` / `currentVersionId`; classroom resolution returns
+`policyVersion` / `policyVersionId` so recordings reference the version in force.
+New field: `extractedEventRetentionDays` (default 1825).
+
+| Method | Path                                                 |
+| ------ | ---------------------------------------------------- |
+| GET    | `/v1/recording-policies/:id/versions` (newest first) |
+| GET    | `/v1/recording-policies/:id/versions/:version`       |
+| GET    | `/v1/recording-policy-versions/:versionId`           |
+
+### Consent
+
+| Method | Path                                                  | Notes                                                                                                                                                                                             |
+| ------ | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| POST   | `/v1/consents`                                        | `{ subjectType: student\|professor, subjectId, policyId, classSectionId?, given, actorId }`; records the policy version shown; supersedes the previous decision for the same subject/policy/scope |
+| POST   | `/v1/consents/:id/withdraw`                           | `{ actorId, reason? }`                                                                                                                                                                            |
+| GET    | `/v1/consents`                                        | `?policyId&classSectionId&subjectId&includeHistory=true` (at least one filter)                                                                                                                    |
+| GET    | `/v1/consents/:id`                                    |                                                                                                                                                                                                   |
+| GET    | `/v1/class-sections/:id/consent-status`               | `?policyId` (default: institution default policy)                                                                                                                                                 |
+| GET    | `/v1/classrooms/:id/recording-policy?classSectionId=` | adds `consentSatisfied` + `consentStatus`                                                                                                                                                         |
+
+A section-specific decision overrides a policy-wide one. When the policy requires explicit consent,
+recording is allowed only if **every professor and every actively enrolled student** has a current,
+non-withdrawn consent (`reason: "consent_missing"` otherwise). The roster comes from
+academic-integration `GET /v1/class-sections/:id/roster → { classSectionId, institutionId, professorIds, studentIds }`
+(`RosterClient`); it is not consulted by classroom resolution when the policy needs no consent.
+
+### Legal holds & retention
+
+| Method | Path                                            | Notes                                                                                                                        |
+| ------ | ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| POST   | `/v1/legal-holds`                               | `{ institutionId, scope: { type: class_section\|recording\|subject, id }, reason, actorId }`                                 |
+| DELETE | `/v1/legal-holds/:id`                           | body `{ actorId, reason? }` — releases (record kept)                                                                         |
+| GET    | `/v1/legal-holds`                               | `?institutionId&active=true\|false`                                                                                          |
+| POST   | `/v1/retention/run`                             | `{ institutionId, now?, dryRun?, actorId? }` → job (`now` may not be in the future unless `dryRun`)                          |
+| GET    | `/v1/retention/jobs` · `/v1/retention/jobs/:id` | counts per kind: `candidates, due, deleted, wouldDelete, skippedHold, failed`; `holdsApplied`, `unconfiguredKinds`, `errors` |
+
+For each kind (`audio`, `transcript`, `summary`, `extracted_event`) the runner asks the data owner
+(`RetentionTarget`, HTTP: `GET /internal/v1/retention/candidates?institutionId&olderThan&kind`,
+`POST /internal/v1/retention/delete { ids, kind, jobId } → { deletedIds }`) for items older than the
+shortest window of the institution's policies, then applies each item's own policy
+(`recordingPolicyId`, default policy otherwise). Candidates may carry `createdAt, recordingSessionId,
+classSectionId, subjectIds, recordingPolicyId`; without `createdAt` an item is only deleted when its
+policy has the shortest window. Items under an active hold are skipped. Deletion is in batches of 500;
+ids not confirmed by the owner count as `failed`. One running job per institution. Audit:
+`retention.deleted` and `retention.skipped_hold` per item, `retention.job_completed` per job (dry runs
+audit only the job). Audit events are not a retention kind and are never deleted here.
+Other audit actions: `recording_policy.version_created`, `consent.recorded`, `consent.withdrawn`,
+`legal_hold.created`, `legal_hold.released`.
+
+| Variable                                                                                                  | Default                               |
+| --------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| `AUDIT_URL`                                                                                               | `http://localhost:4011`               |
+| `ACADEMIC_INTEGRATION_URL`                                                                                | `http://localhost:4003` (roster)      |
+| `AUDIO_INGESTION_URL` / `TRANSCRIPT_MANAGEMENT_URL` / `LECTURE_INTELLIGENCE_URL` / `EVENT_EXTRACTION_URL` | `:8001` / `:4008` / `:8006` / `:8007` |
