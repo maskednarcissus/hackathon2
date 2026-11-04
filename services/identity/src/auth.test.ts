@@ -260,6 +260,7 @@ describe('refresh tokens', () => {
     });
     const second = rotated.json<{ refreshToken: string }>();
 
+    ctx.clock.advance(10_001); // past the 10 s grace window
     const reuse = await ctx.app.inject({
       method: 'POST',
       url: '/v1/auth/refresh',
@@ -277,6 +278,56 @@ describe('refresh tokens', () => {
       payload: { refreshToken: second.refreshToken },
     });
     expect(afterRevocation.statusCode).toBe(401);
+  });
+
+  describe('grace window for concurrent refreshes', () => {
+    type Pair = { accessToken: string; refreshToken: string };
+    const refresh = (refreshToken: string) =>
+      ctx.app.inject({ method: 'POST', url: '/v1/auth/refresh', payload: { refreshToken } });
+
+    it('re-presenting the previous token within 10 s returns the same successor pair', async () => {
+      const first = await login(ctx, ctx.users.student);
+      const second = (await refresh(first.refreshToken)).json<Pair>();
+      ctx.clock.advance(9_000);
+      const replay = await refresh(first.refreshToken);
+      expect(replay.statusCode).toBe(200);
+      expect(replay.json<Pair>()).toMatchObject({
+        accessToken: second.accessToken,
+        refreshToken: second.refreshToken,
+      });
+      expect(ctx.audit.events.some((e) => e.action === 'auth.refresh_reuse_detected')).toBe(false);
+      // No extra rotation happened: the successor is still the live token of the family.
+      const third = await refresh(second.refreshToken);
+      expect(third.statusCode).toBe(200);
+    });
+
+    it('truly concurrent refreshes share one rotation', async () => {
+      const first = await login(ctx, ctx.users.student);
+      const [a, b] = await Promise.all([refresh(first.refreshToken), refresh(first.refreshToken)]);
+      expect(a.statusCode).toBe(200);
+      expect(b.statusCode).toBe(200);
+      expect(a.json<Pair>().refreshToken).toBe(b.json<Pair>().refreshToken);
+      expect((await refresh(a.json<Pair>().refreshToken)).statusCode).toBe(200);
+    });
+
+    it('after 10 s reuse still revokes the family', async () => {
+      const first = await login(ctx, ctx.users.student);
+      const second = (await refresh(first.refreshToken)).json<Pair>();
+      ctx.clock.advance(10_001);
+      expect((await refresh(first.refreshToken)).statusCode).toBe(401);
+      expect(ctx.audit.events.at(-1)).toMatchObject({ action: 'auth.refresh_reuse_detected' });
+      expect((await refresh(second.refreshToken)).statusCode).toBe(401);
+    });
+
+    it('does not apply once the successor itself was rotated', async () => {
+      const first = await login(ctx, ctx.users.student);
+      const second = (await refresh(first.refreshToken)).json<Pair>();
+      ctx.clock.advance(2_000);
+      const third = (await refresh(second.refreshToken)).json<Pair>();
+      ctx.clock.advance(1_000);
+      expect((await refresh(first.refreshToken)).statusCode).toBe(401);
+      expect((await refresh(third.refreshToken)).statusCode).toBe(401);
+    });
   });
 
   it('expired refresh tokens are rejected', async () => {

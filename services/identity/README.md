@@ -62,7 +62,10 @@ Contract: [`phase-4-institutional-intelligence.md` §6](../../docs/architecture/
   The verifier pins the algorithm list (no `alg: none`, no HS256/RS256 confusion) and checks that the key type
   matches the algorithm. Logout adds the token `jti` to a denylist consulted by this service.
 - **Refresh tokens** — opaque `rt_…` (256 bits), 30 days, only SHA-256 stored, rotated on every use. Presenting
-  an already-rotated token revokes the whole family (`auth.refresh_reuse_detected`).
+  an already-rotated token revokes the whole family (`auth.refresh_reuse_detected`)
+  — except within a **10 s grace window**: re-presenting the immediately-previous token returns the same
+  successor pair (no new rotation), so concurrent refreshes from one client do not log the user out.
+  The successor pair is held only in a short-lived `RotationGraceStore` (in-memory; Redis TTL across replicas).
 - **OIDC** — authorization code + PKCE S256, single-use `state` (10 min), `nonce`, RS256 `id_token` verified
   against the IdP JWKS (`iss`, `aud`, `azp`, `exp` with 60 s skew), `email_verified` must not be `false`.
   Users are linked by email **within the institution**; there is no just-in-time account creation.

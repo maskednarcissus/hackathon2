@@ -103,6 +103,7 @@ export interface RefreshTokenRepository {
   create(record: RefreshTokenRecord): Promise<void>;
   update(record: RefreshTokenRecord): Promise<void>;
   findByHash(tokenHash: string): Promise<RefreshTokenRecord | undefined>;
+  findById(id: string): Promise<RefreshTokenRecord | undefined>;
   /** Revokes every non-revoked token of the family; returns how many were revoked. */
   revokeFamily(familyId: string, at: Date): Promise<number>;
   /** Revokes every non-revoked token of the user; returns how many were revoked. */
@@ -219,6 +220,10 @@ class InMemoryRefreshTokens implements RefreshTokenRepository {
   }
   async update(record: RefreshTokenRecord): Promise<void> {
     this.items.set(record.id, clone(record));
+  }
+  async findById(id: string): Promise<RefreshTokenRecord | undefined> {
+    const r = this.items.get(id);
+    return r ? clone(r) : undefined;
   }
   async findByHash(tokenHash: string): Promise<RefreshTokenRecord | undefined> {
     for (const r of this.items.values()) if (r.tokenHash === tokenHash) return clone(r);

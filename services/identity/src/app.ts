@@ -45,6 +45,7 @@ export interface IdentityConfig {
   audience: string;
   accessTokenTtlSeconds: number;
   refreshTokenTtlSeconds: number;
+  rotationGraceSeconds: number;
   maxFailedLogins: number;
   lockoutMinutes: number;
   /** Shared secret for service-to-service calls (sync, authorize). Undefined disables it. */
@@ -57,6 +58,7 @@ export const DEFAULT_CONFIG: IdentityConfig = {
   audience: DEFAULT_AUDIENCE,
   accessTokenTtlSeconds: 15 * 60,
   refreshTokenTtlSeconds: 30 * 24 * 60 * 60,
+  rotationGraceSeconds: 10,
   maxFailedLogins: 5,
   lockoutMinutes: 15,
   internalToken: undefined,
