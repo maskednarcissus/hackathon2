@@ -5,7 +5,12 @@ import { ErrorState } from '../../../components/ErrorState';
 import { Sparkline } from '../../../components/Sparkline';
 import { StatusPill } from '../../../components/StatusPill';
 import styles from '../../../components/dashboard.module.css';
+import { CommandForm } from '../../../components/CommandForm';
+import { Empty } from '../../../components/ui';
+import { getDiagnostics, type Diagnostics } from '../../../lib/console';
 import { getDeviceHealth } from '../../../lib/fleet';
+import { commandStatusLabel, formatPercent } from '../../../lib/labels';
+import { COMMAND_LABELS, isCommandType } from '../../../lib/console';
 import {
   diskUsage,
   formatBytes,
@@ -25,7 +30,10 @@ interface Props {
 
 export default async function DevicePage({ params }: Props): Promise<React.JSX.Element> {
   const { deviceId } = await params;
-  const result = await getDeviceHealth(deviceId);
+  const [result, diagnostics] = await Promise.all([
+    getDeviceHealth(deviceId),
+    getDiagnostics(deviceId),
+  ]);
   const breadcrumb = (
     <p className="breadcrumb">
       <Link href="/">Administração</Link> / <Link href="/devices">Dispositivos</Link> / {deviceId}
@@ -103,6 +111,13 @@ export default async function DevicePage({ params }: Props): Promise<React.JSX.E
         </p>
       ) : null}
 
+      <DiagnosticsSection
+        deviceId={device.deviceId}
+        decommissioned={device.status === 'decommissioned'}
+        diagnostics={diagnostics.ok ? diagnostics.data : null}
+        error={diagnostics.ok ? null : diagnostics.status === 404 ? null : diagnostics.error}
+      />
+
       <section aria-labelledby="metrics-heading">
         <h2 id="metrics-heading">Métricas atuais</h2>
         <dl className={styles.metricGrid}>
@@ -157,5 +172,117 @@ export default async function DevicePage({ params }: Props): Promise<React.JSX.E
         )}
       </section>
     </main>
+  );
+}
+
+function certificateText(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const days = Math.floor((new Date(iso).getTime() - Date.now()) / 86_400_000);
+  return `${formatDateTime(iso)} (${days < 0 ? 'expirado' : `em ${days} d`})`;
+}
+
+function DiagnosticsSection({
+  deviceId,
+  decommissioned,
+  diagnostics,
+  error,
+}: {
+  deviceId: string;
+  decommissioned: boolean;
+  diagnostics: Diagnostics | null;
+  error: string | null;
+}): React.JSX.Element {
+  const commands = diagnostics?.lastCommands ?? [];
+  const backlog = diagnostics?.uploadBacklogTrend ?? [];
+  return (
+    <section aria-labelledby="diag-heading">
+      <h2 id="diag-heading">Diagnóstico e comandos remotos</h2>
+      {error ? (
+        <p role="alert" className="errorBox">
+          Diagnóstico indisponível: {error}
+        </p>
+      ) : null}
+      {diagnostics ? (
+        <>
+          <dl className={styles.metricGrid}>
+            <div>
+              <dt>Disponibilidade (24 h)</dt>
+              <dd>
+                {formatPercent(
+                  diagnostics.uptimePercent24h == null ? null : diagnostics.uptimePercent24h / 100,
+                  1,
+                )}
+              </dd>
+            </div>
+            <div>
+              <dt>Heartbeats perdidos (24 h)</dt>
+              <dd>{diagnostics.missedHeartbeats24h ?? '—'}</dd>
+            </div>
+            <div>
+              <dt>Firmware</dt>
+              <dd>{diagnostics.firmwareVersion ?? '—'}</dd>
+            </div>
+            <div>
+              <dt>Certificado expira</dt>
+              <dd>{certificateText(diagnostics.certificateExpiresAt)}</dd>
+            </div>
+          </dl>
+          {backlog.length > 1 ? (
+            <Sparkline
+              values={backlog.map((b) => b.queuedRecordings)}
+              label="Fila de envio (24 h)"
+              summary={`atual ${backlog.at(-1)?.queuedRecordings ?? 0} gravações`}
+            />
+          ) : null}
+        </>
+      ) : null}
+
+      {decommissioned ? (
+        <p className="muted">Dispositivo desativado: comandos remotos indisponíveis.</p>
+      ) : (
+        <CommandForm deviceId={deviceId} />
+      )}
+
+      <h3>Histórico de comandos</h3>
+      {commands.length === 0 ? (
+        <Empty>Nenhum comando enviado recentemente.</Empty>
+      ) : (
+        <div className={styles.tableWrap}>
+          <table className={styles.table}>
+            <caption>Últimos comandos</caption>
+            <thead>
+              <tr>
+                <th scope="col">Comando</th>
+                <th scope="col">Status</th>
+                <th scope="col">Emitido</th>
+                <th scope="col">Concluído</th>
+                <th scope="col">Solicitante</th>
+                <th scope="col">Resultado</th>
+              </tr>
+            </thead>
+            <tbody>
+              {commands.map((c) => (
+                <tr key={c.commandId}>
+                  <td>{isCommandType(c.type) ? COMMAND_LABELS[c.type] : c.type}</td>
+                  <td>{commandStatusLabel(c.status)}</td>
+                  <td>{formatDateTime(c.issuedAt)}</td>
+                  <td>{formatDateTime(c.finishedAt)}</td>
+                  <td>{c.requestedBy ?? '—'}</td>
+                  <td className="wrap">
+                    {c.output == null ? (
+                      '—'
+                    ) : (
+                      <code>
+                        {typeof c.output === 'string' ? c.output : JSON.stringify(c.output)}
+                      </code>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }
