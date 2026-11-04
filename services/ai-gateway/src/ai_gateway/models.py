@@ -7,7 +7,13 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 
-Task = Literal["lecture_structuring", "event_extraction", "date_resolution", "assistant_answer"]
+Task = Literal[
+    "lecture_structuring",
+    "event_extraction",
+    "date_resolution",
+    "assistant_answer",
+    "group_investigation",
+]
 JsonScalar = str | int | float | bool | None
 
 
