@@ -1,4 +1,4 @@
-﻿# Calendar Service
+# Calendar Service
 
 Academic calendar of record. Publishes confirmed events with source provenance, keeps an
 immutable change history, and detects conflicts before publication (Phase 2 — deliverables 2.14, 2.17).

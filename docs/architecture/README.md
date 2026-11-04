@@ -45,29 +45,29 @@ flowchart LR
 
 ## 2. Port Map & Service Directory
 
-| Service / App | Directory | Runtime / Tech | Default Port | Description |
-|---|---|---|---|---|
-| **student-web** | `apps/student-web` | Next.js 15 (React 19) | `3000` | Student portal, study companion, calendar |
-| **professor-web** | `apps/professor-web` | Next.js 15 (React 19) | `3001` | Review queue, corrections, course overview |
-| **administration-web** | `apps/administration-web`| Next.js 15 (React 19) | `3002` | Fleet monitoring, campus admin & group intelligence |
-| **api** | `apps/api` | TypeScript (Fastify 5) | `4000` | BFF and unified application REST gateway |
-| **identity** | `services/identity` | TypeScript (Fastify 5) | `4001` | Auth, MFA, RBAC, SSO, JWT issuance |
-| **organization** | `services/organization` | TypeScript (Fastify 5) | `4002` | Holding, institution, and campus hierarchy |
-| **academic-integration** | `services/academic-integration` | TypeScript (Fastify 5) | `4003` | SIS/LMS synchronization and timetable mapping |
-| **device-management** | `services/device-management` | TypeScript (Fastify 5) | `4004` | IoT device registry, telemetry, health metrics |
-| **calendar** | `services/calendar` | TypeScript (Fastify 5) | `4005` | Student and institutional calendar operations |
-| **notifications** | `services/notifications` | TypeScript (Fastify 5) | `4006` | Multi-channel dispatch (push, email, in-app) |
-| **transcript-management** | `services/transcript-management` | TypeScript (Fastify 5) | `4008` | Versioned transcript store and corrections |
-| **academic-analytics** | `services/academic-analytics` | TypeScript (Fastify 5) | `4009` | Course- and campus-level delivery indicators |
-| **group-intelligence** | `services/group-intelligence` | TypeScript (Fastify 5) | `4010` | Cross-institution executive dashboards |
-| **audit** | `services/audit` | TypeScript (Fastify 5) | `4011` | Immutable audit logging and compliance tracking |
-| **audio-ingestion** | `services/audio-ingestion` | Python 3.12 (FastAPI) | `4101` | Device chunk upload and checksum validation |
-| **audio-processing** | `services/audio-processing` | Python 3.12 (FastAPI) | `4102` | Quality scoring, normalization, segmentation |
-| **transcription** | `services/transcription` | Python 3.12 (FastAPI) | `4103` | Brazilian Portuguese speech-to-text pipeline |
-| **speaker-diarization** | `services/speaker-diarization` | Python 3.12 (FastAPI) | `4104` | Speaker turn clustering and labeling |
-| **lecture-intelligence** | `services/lecture-intelligence` | Python 3.12 (FastAPI) | `4105` | Summaries, concept extraction, Q&A synthesis |
-| **event-extraction** | `services/event-extraction` | Python 3.12 (FastAPI) | `4106` | High-precision exam/deadline extraction & date resolution |
-| **ai-gateway** | `services/ai-gateway` | Python 3.12 (FastAPI) | `4107` | Centralized LLM gateway, schema validation, cost tracker |
+| Service / App             | Directory                        | Runtime / Tech         | Default Port | Description                                               |
+| ------------------------- | -------------------------------- | ---------------------- | ------------ | --------------------------------------------------------- |
+| **student-web**           | `apps/student-web`               | Next.js 15 (React 19)  | `3000`       | Student portal, study companion, calendar                 |
+| **professor-web**         | `apps/professor-web`             | Next.js 15 (React 19)  | `3001`       | Review queue, corrections, course overview                |
+| **administration-web**    | `apps/administration-web`        | Next.js 15 (React 19)  | `3002`       | Fleet monitoring, campus admin & group intelligence       |
+| **api**                   | `apps/api`                       | TypeScript (Fastify 5) | `4000`       | BFF and unified application REST gateway                  |
+| **identity**              | `services/identity`              | TypeScript (Fastify 5) | `4001`       | Auth, MFA, RBAC, SSO, JWT issuance                        |
+| **organization**          | `services/organization`          | TypeScript (Fastify 5) | `4002`       | Holding, institution, and campus hierarchy                |
+| **academic-integration**  | `services/academic-integration`  | TypeScript (Fastify 5) | `4003`       | SIS/LMS synchronization and timetable mapping             |
+| **device-management**     | `services/device-management`     | TypeScript (Fastify 5) | `4004`       | IoT device registry, telemetry, health metrics            |
+| **calendar**              | `services/calendar`              | TypeScript (Fastify 5) | `4005`       | Student and institutional calendar operations             |
+| **notifications**         | `services/notifications`         | TypeScript (Fastify 5) | `4006`       | Multi-channel dispatch (push, email, in-app)              |
+| **transcript-management** | `services/transcript-management` | TypeScript (Fastify 5) | `4008`       | Versioned transcript store and corrections                |
+| **academic-analytics**    | `services/academic-analytics`    | TypeScript (Fastify 5) | `4009`       | Course- and campus-level delivery indicators              |
+| **group-intelligence**    | `services/group-intelligence`    | TypeScript (Fastify 5) | `4010`       | Cross-institution executive dashboards                    |
+| **audit**                 | `services/audit`                 | TypeScript (Fastify 5) | `4011`       | Immutable audit logging and compliance tracking           |
+| **audio-ingestion**       | `services/audio-ingestion`       | Python 3.12 (FastAPI)  | `4101`       | Device chunk upload and checksum validation               |
+| **audio-processing**      | `services/audio-processing`      | Python 3.12 (FastAPI)  | `4102`       | Quality scoring, normalization, segmentation              |
+| **transcription**         | `services/transcription`         | Python 3.12 (FastAPI)  | `4103`       | Brazilian Portuguese speech-to-text pipeline              |
+| **speaker-diarization**   | `services/speaker-diarization`   | Python 3.12 (FastAPI)  | `4104`       | Speaker turn clustering and labeling                      |
+| **lecture-intelligence**  | `services/lecture-intelligence`  | Python 3.12 (FastAPI)  | `4105`       | Summaries, concept extraction, Q&A synthesis              |
+| **event-extraction**      | `services/event-extraction`      | Python 3.12 (FastAPI)  | `4106`       | High-precision exam/deadline extraction & date resolution |
+| **ai-gateway**            | `services/ai-gateway`            | Python 3.12 (FastAPI)  | `4107`       | Centralized LLM gateway, schema validation, cost tracker  |
 
 ---
 

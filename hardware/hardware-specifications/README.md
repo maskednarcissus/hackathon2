@@ -1,4 +1,4 @@
-﻿# Hardware Specifications
+# Hardware Specifications
 
 Audio hardware requirements and reference specifications for the Classroom Intelligence capture device.
 

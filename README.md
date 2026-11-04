@@ -1,4 +1,4 @@
-﻿# Classroom Intelligence
+# Classroom Intelligence
 
 AI-powered classroom capture, academic intelligence and student coordination platform.
 

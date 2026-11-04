@@ -1,4 +1,4 @@
-﻿# Unit Tests
+# Unit Tests
 
 Unit tests for all TypeScript and Python services and packages.
 

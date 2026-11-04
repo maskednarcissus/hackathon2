@@ -1,4 +1,4 @@
-﻿import { z } from 'zod';
+import { z } from 'zod';
 
 export const RecordingSessionSchema = z.object({
   deviceId: z.string().uuid(),

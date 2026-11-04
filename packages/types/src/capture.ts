@@ -1,4 +1,4 @@
-﻿export interface Classroom {
+export interface Classroom {
   id: string;
   campusId: string;
   name: string;

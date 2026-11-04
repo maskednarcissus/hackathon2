@@ -1,13 +1,8 @@
 {
   "root": true,
   "parser": "@typescript-eslint/parser",
-  "plugins": [
-    "@typescript-eslint"
-  ],
-  "extends": [
-    "eslint:recommended",
-    "plugin:@typescript-eslint/recommended-type-checked"
-  ],
+  "plugins": ["@typescript-eslint"],
+  "extends": ["eslint:recommended", "plugin:@typescript-eslint/recommended-type-checked"],
   "rules": {
     "@typescript-eslint/no-explicit-any": "error",
     "@typescript-eslint/no-unused-vars": [
@@ -20,13 +15,7 @@
     "@typescript-eslint/no-floating-promises": "error",
     "@typescript-eslint/require-await": "off"
   },
-  "ignorePatterns": [
-    "dist/",
-    ".next/",
-    "node_modules/",
-    "*.config.ts",
-    "next-env.d.ts"
-  ],
+  "ignorePatterns": ["dist/", ".next/", "node_modules/", "*.config.ts", "next-env.d.ts"],
   "parserOptions": {
     "project": true
   },
@@ -36,9 +25,7 @@
   },
   "overrides": [
     {
-      "files": [
-        "**/*.test.ts"
-      ],
+      "files": ["**/*.test.ts"],
       "rules": {
         "@typescript-eslint/unbound-method": "off"
       }

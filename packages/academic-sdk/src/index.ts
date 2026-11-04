@@ -1,4 +1,4 @@
-﻿// Classroom Intelligence — Academic SDK
+// Classroom Intelligence — Academic SDK
 // Higher-level helpers for working with academic domain entities.
 // SDK modules will be exported here as they are built.
 

@@ -1,4 +1,4 @@
-﻿# Security Tests
+# Security Tests
 
 Security test suite covering authentication, authorization, injection, and LGPD compliance.
 

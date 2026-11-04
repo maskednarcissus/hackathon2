@@ -1,4 +1,4 @@
-﻿# AI Evaluation Documentation
+# AI Evaluation Documentation
 
 Methodology, benchmarks and results for AI model evaluation in Classroom Intelligence.
 

@@ -1,4 +1,4 @@
-﻿# Security Documentation
+# Security Documentation
 
 Security architecture, threat model and operational security procedures.
 

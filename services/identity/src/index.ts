@@ -1,4 +1,4 @@
-﻿import { createPublicKey, randomUUID } from 'node:crypto';
+import { createPublicKey, randomUUID } from 'node:crypto';
 import pino from 'pino';
 import { HttpAuditClient, InMemoryAuditClient } from './audit-client.js';
 import { buildApp, createDefaultDeps, DEFAULT_CONFIG } from './app.js';

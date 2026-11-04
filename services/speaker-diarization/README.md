@@ -19,11 +19,11 @@ benchmark corpus (Phase 6.1 covers overlapping speech and multi-turn improvement
 
 ## API (port 8004)
 
-| Method | Path | |
-|---|---|---|
-| `GET` | `/health` | |
-| `POST` | `/v1/diarizations` | `{transcriptId, recordingSessionId?, institutionId?, maxSpeakers?, audio?: {storageUri \| wavBase64 \| segments[]}, segments:[{segmentIndex,startMs,endMs,speakerTag?,speakerLabel?}]}` → assignments, turns, `speakerCount` |
-| `POST` | `/v1/events/transcription-completed` | Pub/Sub push endpoint; fetches segments from transcript-management, reads `data.audioSegments` (or `data.storageUri`) |
+| Method | Path                                 |                                                                                                                                                                                                                              |
+| ------ | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET`  | `/health`                            |                                                                                                                                                                                                                              |
+| `POST` | `/v1/diarizations`                   | `{transcriptId, recordingSessionId?, institutionId?, maxSpeakers?, audio?: {storageUri \| wavBase64 \| segments[]}, segments:[{segmentIndex,startMs,endMs,speakerTag?,speakerLabel?}]}` → assignments, turns, `speakerCount` |
+| `POST` | `/v1/events/transcription-completed` | Pub/Sub push endpoint; fetches segments from transcript-management, reads `data.audioSegments` (or `data.storageUri`)                                                                                                        |
 
 Results are written with `PUT /v1/transcripts/{id}/speakers` and announced as
 `diarization.completed`; successes and failures are audited.

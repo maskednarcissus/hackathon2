@@ -18,12 +18,12 @@ Portuguese transcript segments (contract: `docs/architecture/phase-1-capture-pip
 
 ## API (port 8003)
 
-| Method | Path | |
-|---|---|---|
-| `GET` | `/health` | |
-| `POST` | `/v1/transcriptions` | `{recordingSessionId, scheduledClassId?, institutionId?, discipline?, language?, segments:[{index,startMs,endMs,storageUri}]}` → `202 {jobId}` (`200` if already submitted) |
-| `GET` | `/v1/transcriptions/{jobId}` | job status, `transcriptId`, counts, failure reason |
-| `POST` | `/v1/events/recording-segmented` | Pub/Sub push endpoint |
+| Method | Path                             |                                                                                                                                                                             |
+| ------ | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET`  | `/health`                        |                                                                                                                                                                             |
+| `POST` | `/v1/transcriptions`             | `{recordingSessionId, scheduledClassId?, institutionId?, discipline?, language?, segments:[{index,startMs,endMs,storageUri}]}` → `202 {jobId}` (`200` if already submitted) |
+| `GET`  | `/v1/transcriptions/{jobId}`     | job status, `transcriptId`, counts, failure reason                                                                                                                          |
+| `POST` | `/v1/events/recording-segmented` | Pub/Sub push endpoint                                                                                                                                                       |
 
 ## Provider
 

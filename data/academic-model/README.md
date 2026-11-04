@@ -1,4 +1,4 @@
-﻿# Academic Data Model
+# Academic Data Model
 
 This directory contains the canonical academic data model for Classroom Intelligence.
 

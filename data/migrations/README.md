@@ -7,6 +7,7 @@ Managed with Flyway or standard SQL migration runners against PostgreSQL 16+ / A
 `V{version}__{description}.sql`
 
 Examples:
+
 - `V001__initial_academic_schema.sql`
 - `V002__add_syllabus_coverage.sql`
 
@@ -21,11 +22,13 @@ Examples:
 ## Running Migrations Locally
 
 Ensure local Postgres is running via Docker Compose:
+
 ```bash
 docker compose up -d postgres
 ```
 
 Execute migration script:
+
 ```bash
 docker exec -i ci-postgres psql -U ci -d classroom_intelligence < data/migrations/V001__initial_academic_schema.sql
 ```

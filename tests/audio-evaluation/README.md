@@ -22,11 +22,11 @@ Representative classroom recordings for transcription and audio quality benchmar
 
 `run_benchmark.py` scores each manifest case and writes `results.json` + `report.md`:
 
-| Metric | How |
-|---|---|
-| WER | word-level Levenshtein distance / reference words |
-| CER | character-level Levenshtein distance / reference characters |
-| Terminology accuracy | Σ min(hyp, ref) / Σ ref occurrences of the case's `terms` |
+| Metric               | How                                                         |
+| -------------------- | ----------------------------------------------------------- |
+| WER                  | word-level Levenshtein distance / reference words           |
+| CER                  | character-level Levenshtein distance / reference characters |
+| Terminology accuracy | Σ min(hyp, ref) / Σ ref occurrences of the case's `terms`   |
 
 Text normalisation (pt-BR): NFKC, casefold, punctuation removed (intra-word `-` and `'`
 kept), numbers kept as written. `--accent-insensitive` additionally strips diacritics.

@@ -1,4 +1,4 @@
-﻿export interface ExtractedEvent {
+export interface ExtractedEvent {
   id: string;
   type: AcademicEventType;
   title: string;
@@ -37,12 +37,7 @@ export interface ExtractionConfidence {
 }
 
 export type ConfirmationStatus =
-  | 'suggested'
-  | 'awaiting_professor'
-  | 'awaiting_admin'
-  | 'confirmed'
-  | 'published'
-  | 'rejected';
+  'suggested' | 'awaiting_professor' | 'awaiting_admin' | 'confirmed' | 'published' | 'rejected';
 
 export interface EventChange {
   changedAt: Date;

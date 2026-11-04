@@ -67,12 +67,14 @@ erDiagram
 ## Schema Domains & Tables
 
 ### 1. Organizational & Institutional Hierarchy
+
 - **`holding_companies`**: Multi-tenant holding conglomerates.
 - **`institutions`**: Accredited academic entities/brands.
 - **`campuses`**: Physical or regional campuses with distinct timezones.
 - **`departments`**: Academic units (e.g., School of Medicine, Dept of Law).
 
 ### 2. Academic Core
+
 - **`academic_terms`**: Semesters, trimesters, or annual periods.
 - **`academic_programs`**: Degree programs (undergrad, grad, certification).
 - **`courses`**: Course catalog entries bound to a term and curriculum.
@@ -83,6 +85,7 @@ erDiagram
 - **`scheduled_classes`**: Individual calendar timetable occurrences.
 
 ### 3. Capture & Hardware Fleet
+
 - **`capture_devices`**: Secure IoT audio array units, firmware versions, health status.
 - **`device_assignments`**: Historical audit log of classroom deployments.
 - **`recording_policies`**: LGPD legal basis, explicit consent flags, retention rules.
@@ -91,12 +94,14 @@ erDiagram
 - **`capture_incidents`**: Fleet diagnostics and failure tracking.
 
 ### 4. Transcription & Diarization
+
 - **`transcripts`**: Consolidated transcript entity with WER and version.
 - **`transcript_segments`**: Fine-grained timestamped passages with confidence and language.
 - **`transcript_corrections`**: Non-destructive correction audit trail.
 - **`speakers`**: Diarization clusters (Speaker 1, Speaker 2) with confidence.
 
 ### 5. Lecture Intelligence
+
 - **`lecture_summaries`**: Executive summaries, topic models, processing version.
 - **`lecture_topics`**: Hierarchical outline with start/end millisecond markers.
 - **`concepts`**: Term, definition, and concrete pedagogical examples.
@@ -104,6 +109,7 @@ erDiagram
 - **`reading_references`**: Referenced books, articles, legislation, and URLs.
 
 ### 6. Event Extraction & Calendar
+
 - **`extracted_events`**: High-stakes announcements (exams, deadlines, syllabus shifts) with multi-dimensional confidence scores.
 - **`event_confirmations`**: Professor review queue responses (confirm, edit, reject).
 - **`event_changes`**: Audit delta tracking shifts in dates or descriptions.
@@ -111,6 +117,7 @@ erDiagram
 - **`student_calendar_events`**: Student-personalized calendar associations.
 
 ### 7. Governance, Consent & Audit
+
 - **`recording_consents`**: Student/professor consent records under LGPD Art. 7/8.
 - **`audit_events`**: Immutable append-only log of all critical system actions.
 - **`content_interactions`**: Learning analytics and student engagement metrics.

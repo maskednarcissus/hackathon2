@@ -20,29 +20,29 @@ transcript segments
   → publication policy → auto-publish or review queue
 ```
 
-| Module | Purpose |
-|---|---|
-| `dates.py` | pt-BR resolver: `20 de novembro`, `dia 15`, `15/11(/2026)`, `dia 10 do mês que vem`, number words, `amanhã`, `depois de amanhã`, `hoje`, `daqui a duas semanas`, `em 15 dias`, `na próxima aula`/`aula que vem` (next scheduled class of the section), `semana que vem`, weekdays (`próxima segunda`, `sexta que vem`, `na quarta da semana que vem`), `do dia X para o dia Y`, times (`19h`, `19h30`, `às 7 da noite`, `14:15`, `meio dia`). Vague expressions (`final do mês`, `mês que vem`, `depois do feriado`, `em breve`, `lá pra maio`, `a definir`…) and conflicting dates → `eventDate: null`, `ambiguous: true`. Past dates are flagged. |
-| `keywords.py` | Event-type keyword families, hypothetical/retrospective/negation/hedge/content-reference cues. |
-| `injection.py` | Local prompt-injection signals (defence in depth on top of the gateway). |
-| `extractors.py` | `HeuristicExtractor` (deterministic, offline/CI) and `LlmExtractor` (gateway, JSON schema). |
-| `validation.py` | Hallucination rules (2.21) and confidence: `overall = 0.4·min + 0.6·geomean` of transcription, classification, date and course dimensions. |
-| `service.py` | Pipeline, dedup, policy, professor review workflow, calendar publication, audit and events. |
-| `http_clients.py` | Adapters for ai-gateway, calendar, academic-integration, transcript-management, audit, Pub/Sub. |
+| Module            | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dates.py`        | pt-BR resolver: `20 de novembro`, `dia 15`, `15/11(/2026)`, `dia 10 do mês que vem`, number words, `amanhã`, `depois de amanhã`, `hoje`, `daqui a duas semanas`, `em 15 dias`, `na próxima aula`/`aula que vem` (next scheduled class of the section), `semana que vem`, weekdays (`próxima segunda`, `sexta que vem`, `na quarta da semana que vem`), `do dia X para o dia Y`, times (`19h`, `19h30`, `às 7 da noite`, `14:15`, `meio dia`). Vague expressions (`final do mês`, `mês que vem`, `depois do feriado`, `em breve`, `lá pra maio`, `a definir`…) and conflicting dates → `eventDate: null`, `ambiguous: true`. Past dates are flagged. |
+| `keywords.py`     | Event-type keyword families, hypothetical/retrospective/negation/hedge/content-reference cues.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `injection.py`    | Local prompt-injection signals (defence in depth on top of the gateway).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `extractors.py`   | `HeuristicExtractor` (deterministic, offline/CI) and `LlmExtractor` (gateway, JSON schema).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `validation.py`   | Hallucination rules (2.21) and confidence: `overall = 0.4·min + 0.6·geomean` of transcription, classification, date and course dimensions.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `service.py`      | Pipeline, dedup, policy, professor review workflow, calendar publication, audit and events.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `http_clients.py` | Adapters for ai-gateway, calendar, academic-integration, transcript-management, audit, Pub/Sub.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 
 ## Endpoints
 
-| Method | Path | Notes |
-|---|---|---|
-| GET | `/health` | |
-| POST | `/v1/extractions` | `{transcriptId, scheduledClassId, recordingSessionId?, segments?, extractor?}` → `ExtractionResult` (events, deduplicated, validation stats, awaitingReview, published). Without `segments` the transcript is fetched from transcript-management. |
-| POST | `/v1/events/transcript-ready` | Push handler for `transcript.created` / `diarization.completed` / `transcript.corrected` envelopes. |
-| GET | `/v1/review-queue?professorId&status&classSectionId` | Default `status=awaiting_professor,awaiting_admin`, sorted by date (undated last). |
-| GET | `/v1/events/{id}` | Full event with provenance, mentions, conflicts, change history. |
-| POST | `/v1/events/{id}/confirm` | `{notes?}`. Confirming a date-change proposal applies the new date to the original event (with a `date_change` record) and republishes it. |
-| POST | `/v1/events/{id}/edit` | `{changes:{title?,type?,eventDate?,eventTime?,description?}, reason?}` — implies confirm; on a published event it republishes and emits `event.updated`. |
-| POST | `/v1/events/{id}/reject` | `{reason}` (required). Published events cannot be rejected. |
-| POST | `/v1/events/{id}/publish` | Publishes a confirmed event (idempotent). |
+| Method | Path                                                 | Notes                                                                                                                                                                                                                                             |
+| ------ | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/health`                                            |                                                                                                                                                                                                                                                   |
+| POST   | `/v1/extractions`                                    | `{transcriptId, scheduledClassId, recordingSessionId?, segments?, extractor?}` → `ExtractionResult` (events, deduplicated, validation stats, awaitingReview, published). Without `segments` the transcript is fetched from transcript-management. |
+| POST   | `/v1/events/transcript-ready`                        | Push handler for `transcript.created` / `diarization.completed` / `transcript.corrected` envelopes.                                                                                                                                               |
+| GET    | `/v1/review-queue?professorId&status&classSectionId` | Default `status=awaiting_professor,awaiting_admin`, sorted by date (undated last).                                                                                                                                                                |
+| GET    | `/v1/events/{id}`                                    | Full event with provenance, mentions, conflicts, change history.                                                                                                                                                                                  |
+| POST   | `/v1/events/{id}/confirm`                            | `{notes?}`. Confirming a date-change proposal applies the new date to the original event (with a `date_change` record) and republishes it.                                                                                                        |
+| POST   | `/v1/events/{id}/edit`                               | `{changes:{title?,type?,eventDate?,eventTime?,description?}, reason?}` — implies confirm; on a published event it republishes and emits `event.updated`.                                                                                          |
+| POST   | `/v1/events/{id}/reject`                             | `{reason}` (required). Published events cannot be rejected.                                                                                                                                                                                       |
+| POST   | `/v1/events/{id}/publish`                            | Publishes a confirmed event (idempotent).                                                                                                                                                                                                         |
 
 Review actions require `X-Actor-Id` and `X-Actor-Role` (`professor` of the section, `admin`
 or `coordinator`) until identity lands in Phase 3. Errors: `{"error": {"code", "message", "details?"}}`.
@@ -58,17 +58,17 @@ conflicts. Sections without a known professor go to `awaiting_admin`.
 
 ## Configuration
 
-| Env | Default |
-|---|---|
-| `EVENT_EXTRACTOR` | `hybrid` (`llm`, `heuristic`) |
-| `AI_GATEWAY_URL` | `http://localhost:8005` |
-| `CALENDAR_URL` | `http://localhost:4005` |
-| `ACADEMIC_INTEGRATION_URL` | `http://localhost:4003` |
-| `TRANSCRIPT_MANAGEMENT_URL` | `http://localhost:4008` |
-| `AUDIT_URL` | `http://localhost:4011` |
-| `AUTO_PUBLISH`, `AUTO_PUBLISH_MIN_CONFIDENCE` | `false`, `0.92` |
-| `EVENT_PUBLISHER=pubsub` + `GCP_PROJECT_ID` | Pub/Sub publishing (extra `gcp`) |
-| `EVENT_EXTRACTION_PROMPT_VERSION` | gateway's active version |
+| Env                                           | Default                          |
+| --------------------------------------------- | -------------------------------- |
+| `EVENT_EXTRACTOR`                             | `hybrid` (`llm`, `heuristic`)    |
+| `AI_GATEWAY_URL`                              | `http://localhost:8005`          |
+| `CALENDAR_URL`                                | `http://localhost:4005`          |
+| `ACADEMIC_INTEGRATION_URL`                    | `http://localhost:4003`          |
+| `TRANSCRIPT_MANAGEMENT_URL`                   | `http://localhost:4008`          |
+| `AUDIT_URL`                                   | `http://localhost:4011`          |
+| `AUTO_PUBLISH`, `AUTO_PUBLISH_MIN_CONFIDENCE` | `false`, `0.92`                  |
+| `EVENT_PUBLISHER=pubsub` + `GCP_PROJECT_ID`   | Pub/Sub publishing (extra `gcp`) |
+| `EVENT_EXTRACTION_PROMPT_VERSION`             | gateway's active version         |
 
 > The event store is in-memory in this phase (see the V002 migration notes for the Postgres
 > columns it maps to).

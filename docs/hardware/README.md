@@ -1,4 +1,4 @@
-﻿# Hardware Documentation
+# Hardware Documentation
 
 Classroom capture device documentation, installation guides and reference designs.
 

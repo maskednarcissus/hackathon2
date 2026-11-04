@@ -1,4 +1,4 @@
-﻿# Integration Documentation
+# Integration Documentation
 
 Third-party system integration guides for Classroom Intelligence.
 

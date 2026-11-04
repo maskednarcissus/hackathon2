@@ -1,4 +1,4 @@
-﻿# Device Diagnostics
+# Device Diagnostics
 
 Diagnostic tools and test suites for the Classroom Intelligence capture device.
 

@@ -1,4 +1,4 @@
-﻿import { z } from 'zod';
+import { z } from 'zod';
 
 export const TranscriptSegmentSchema = z.object({
   startMs: z.number().int().nonnegative(),

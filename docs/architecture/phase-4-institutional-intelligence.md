@@ -6,15 +6,15 @@ aggregated with a **minimum cohort size of 5** (smaller groups are suppressed as
 
 ## 1. Component map
 
-| Component | Lang | Port | Deliverables |
-|---|---|---|---|
-| `services/academic-analytics` | TS / Fastify | 4009 | 4.2, 4.3, 4.4, 4.5, 4.9 |
-| `services/device-management` | TS / Fastify | 4004 | 4.7 (fleet console, diagnostics, remote commands) |
-| `hardware/firmware` | Py | — | 4.7 (command execution) |
-| `services/notifications` | TS / Fastify | 4006 | 4.8 (incident queue on top of alerts) |
-| `services/organization` | TS / Fastify | 4002 | 4.10, 4.12 (policy versions, consent, retention) |
-| `services/identity` | TS / Fastify | 4001 | 4.11 (data subject rights) |
-| `apps/administration-web` | Next.js | 3002 | 4.1, 4.3, 4.6, 4.7, 4.8, 4.10 UI |
+| Component                     | Lang         | Port | Deliverables                                      |
+| ----------------------------- | ------------ | ---- | ------------------------------------------------- |
+| `services/academic-analytics` | TS / Fastify | 4009 | 4.2, 4.3, 4.4, 4.5, 4.9                           |
+| `services/device-management`  | TS / Fastify | 4004 | 4.7 (fleet console, diagnostics, remote commands) |
+| `hardware/firmware`           | Py           | —    | 4.7 (command execution)                           |
+| `services/notifications`      | TS / Fastify | 4006 | 4.8 (incident queue on top of alerts)             |
+| `services/organization`       | TS / Fastify | 4002 | 4.10, 4.12 (policy versions, consent, retention)  |
+| `services/identity`           | TS / Fastify | 4001 | 4.11 (data subject rights)                        |
+| `apps/administration-web`     | Next.js      | 3002 | 4.1, 4.3, 4.6, 4.7, 4.8, 4.10 UI                  |
 
 ## 2. Academic analytics (4.2–4.5, 4.9)
 
@@ -24,29 +24,29 @@ transcript-management (transcript stats), event-extraction (event status / corre
 (fleet), notifications (alerts). A nightly `POST /v1/snapshots/run {institutionId, date}` materialises
 daily aggregates; reads are served from snapshots + live fallback.
 
-* **Syllabus coverage (4.2):** `PUT /v1/courses/{courseId}/syllabus { items: [{ id, title, keywords?: [], plannedWeek?: n }] }`;
+- **Syllabus coverage (4.2):** `PUT /v1/courses/{courseId}/syllabus { items: [{ id, title, keywords?: [], plannedWeek?: n }] }`;
   `GET /v1/courses/{courseId}/coverage` → `{ items: [{ id, title, status: "covered"|"partial"|"not_covered", coverageScore, matchedLectures: [{ scheduledClassId, date, topicTitle, score }], plannedWeek, firstCoveredWeek, behindSchedule }], coverageRatio }`.
   Matching = pt-BR normalised token overlap + embedding cosine (ai-gateway `/v1/embed`) between syllabus
   items and lecture topics/concepts; thresholds covered ≥ 0.75, partial ≥ 0.5.
-* **Assessment calendar (4.3):** `GET /v1/institutions/{id}/assessment-calendar?from&to&programId?&courseId?`
+- **Assessment calendar (4.3):** `GET /v1/institutions/{id}/assessment-calendar?from&to&programId?&courseId?`
   → days with assessments per course/section, load per day, status (published / awaiting review).
-* **Cross-course conflicts (4.4):** `GET /v1/institutions/{id}/assessment-conflicts?from&to` → conflicts
+- **Cross-course conflicts (4.4):** `GET /v1/institutions/{id}/assessment-conflicts?from&to` → conflicts
   (`assessment_overlap_shared_students`, `assessment_load`, `same_day_same_program`), each with the affected
   sections, aggregated student counts (cohort rule) and severity.
-* **Professor adoption & class analytics (4.5):** `GET /v1/institutions/{id}/adoption?from&to` →
+- **Professor adoption & class analytics (4.5):** `GET /v1/institutions/{id}/adoption?from&to` →
   per professor/section: classes scheduled, captured, transcribed, structured, events extracted,
   review rate (events reviewed / extracted), median review latency, corrections made; and
   per section: student engagement aggregates (views, searches, assistant questions — cohort rule).
-* **Operational reports (4.9):** `GET /v1/institutions/{id}/reports/{kind}?from&to&format=json|csv`,
+- **Operational reports (4.9):** `GET /v1/institutions/{id}/reports/{kind}?from&to&format=json|csv`,
   kinds `capture-coverage` (scheduled vs captured by campus/classroom/day), `transcription-success`
   (success rate, mean confidence, failures by reason), `corrections` (transcript corrections and event
   edits/rejections by course), `processing-latency` (class end → transcript → summary → events p50/p95).
 
 ## 3. Campus overview & fleet console (4.6, 4.7)
 
-* Campus overview is composed in administration-web from analytics `capture-coverage` (today), device
+- Campus overview is composed in administration-web from analytics `capture-coverage` (today), device
   fleet health (Phase 1) and open alerts.
-* Fleet console (device-management): `GET /v1/fleet?institutionId&campusId&status&firmwareVersion&q&sort&page`
+- Fleet console (device-management): `GET /v1/fleet?institutionId&campusId&status&firmwareVersion&q&sort&page`
   (paged, with classroom/campus names), `GET /v1/devices/{id}/diagnostics` (latest heartbeat, 24 h uptime %,
   missed heartbeats, upload backlog trend, firmware, certificate expiry, last commands),
   remote commands `POST /v1/devices/{id}/commands { type: "reboot"|"self_test"|"upload_now"|"refresh_plan"|"rotate_logs", requestedBy }`
@@ -68,15 +68,15 @@ SLA by severity (critical 1 h, high 4 h, medium 24 h, low 72 h) → `slaDueAt`, 
 
 ## 5. Recording governance (4.10, 4.12)
 
-* Policy versions (organization): every `PATCH /v1/recording-policies/{id}` creates an immutable version
+- Policy versions (organization): every `PATCH /v1/recording-policies/{id}` creates an immutable version
   (`GET /v1/recording-policies/{id}/versions`); recordings reference the policy version in force.
-* Consent (4.10): `POST /v1/consents { subjectType: "student"|"professor", subjectId, policyId, classSectionId?, given, actorId }`,
+- Consent (4.10): `POST /v1/consents { subjectType: "student"|"professor", subjectId, policyId, classSectionId?, given, actorId }`,
   `POST /v1/consents/{id}/withdraw`, `GET /v1/consents?policyId&classSectionId&subjectId`,
   `GET /v1/class-sections/{id}/consent-status` → `{ requiresExplicitConsent, allProfessorsConsented, studentsConsented, studentsTotal, recordingAllowed }`.
   When a policy requires explicit consent, academic-integration's recording plan sets
   `recordingEnabled=false, disabledReason: "consent_missing"` (organization exposes this via
   `GET /v1/classrooms/{id}/recording-policy?classSectionId=` → adds `consentSatisfied`).
-* Retention (4.12): `POST /v1/retention/run { institutionId, now, dryRun }` computes due items per
+- Retention (4.12): `POST /v1/retention/run { institutionId, now, dryRun }` computes due items per
   policy (`audio` after `audioRetentionDays`, `transcript`, `summary`, `extracted_event`) by asking each data
   owner via `RetentionTarget` clients (`GET /internal/v1/retention/candidates?institutionId&olderThan&kind` →
   ids; `POST /internal/v1/retention/delete { ids, kind, jobId }` → deleted ids), respecting **legal holds**

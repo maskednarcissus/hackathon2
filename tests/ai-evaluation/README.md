@@ -4,12 +4,12 @@ Evaluation datasets and runners for AI-generated academic information.
 
 ## Event extraction (Phase 2 · deliverable 2.20)
 
-| File | Purpose |
-|---|---|
-| `event-extraction-cases.yaml` | 50 pt-BR cases: exams, quizzes, assignments, projects, presentations, readings, cancellations, reschedules, room changes; absolute / relative / next-class / weekday dates and times; ambiguous, hedged, past, hypothetical, retrospective, negated and chatter cases; prompt injection; dedup within a class, across classes, and date-change proposals. |
-| `event-extraction-holdout.yaml` | 8 cases written after the heuristic rules were tuned and never used for tuning. |
-| `run_event_eval.py` | Runs the cases through the real `services/event-extraction` pipeline with in-memory adapters and an auto-publish policy (0.92). |
-| `test_event_eval.py` | pytest wrapper enforcing the thresholds with the heuristic extractor. |
+| File                            | Purpose                                                                                                                                                                                                                                                                                                                                                   |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `event-extraction-cases.yaml`   | 50 pt-BR cases: exams, quizzes, assignments, projects, presentations, readings, cancellations, reschedules, room changes; absolute / relative / next-class / weekday dates and times; ambiguous, hedged, past, hypothetical, retrospective, negated and chatter cases; prompt injection; dedup within a class, across classes, and date-change proposals. |
+| `event-extraction-holdout.yaml` | 8 cases written after the heuristic rules were tuned and never used for tuning.                                                                                                                                                                                                                                                                           |
+| `run_event_eval.py`             | Runs the cases through the real `services/event-extraction` pipeline with in-memory adapters and an auto-publish policy (0.92).                                                                                                                                                                                                                           |
+| `test_event_eval.py`            | pytest wrapper enforcing the thresholds with the heuristic extractor.                                                                                                                                                                                                                                                                                     |
 
 ```bash
 python tests/ai-evaluation/run_event_eval.py                       # heuristic, offline

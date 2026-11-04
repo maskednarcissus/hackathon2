@@ -1,4 +1,4 @@
-﻿/** Organizational hierarchy */
+/** Organizational hierarchy */
 export interface HoldingCompany {
   id: string;
   name: string;
@@ -26,7 +26,7 @@ export interface AcademicTerm {
   institutionId: string;
   name: string;
   startDate: string; // ISO 8601
-  endDate: string;   // ISO 8601
+  endDate: string; // ISO 8601
 }
 
 export interface Course {

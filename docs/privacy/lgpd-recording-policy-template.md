@@ -1,4 +1,5 @@
 # Política Institucional de Gravação e Tratamento de Dados em Sala de Aula
+
 ## Modelo de Conformidade com a Lei Geral de Proteção de Dados (LGPD — Lei nº 13.709/2018)
 
 **Entidade Mantenedora:** `[NOME DA HOLDING / ENTIDADE MANTENEDORA]`  
@@ -35,14 +36,14 @@ O tratamento de dados pessoais realizado pela plataforma fundamenta-se nas segui
 Em observância ao princípio da necessidade e minimização de dados (Art. 6º, III), a plataforma opera sob os seguintes parâmetros:
 
 - **Dados Coletados:**
-  * Sinal de áudio ambiente da sala de aula durante a sessão agendada.
-  * Transcrição textual com marcações temporais das falas.
-  * Separação acústica de interlocutores (*diarização* por rótulos genéricos: "Orador 1", "Orador 2").
-  * Metadados da aula (código da disciplina, turma, sala, data/hora e docente responsável).
+  - Sinal de áudio ambiente da sala de aula durante a sessão agendada.
+  - Transcrição textual com marcações temporais das falas.
+  - Separação acústica de interlocutores (_diarização_ por rótulos genéricos: "Orador 1", "Orador 2").
+  - Metadados da aula (código da disciplina, turma, sala, data/hora e docente responsável).
 - **Dados NÃO Coletados / Vedações Expressas:**
-  * Gravação de vídeo ou captura de imagens dos alunos.
-  * Identificação biométrica por voz para reconhecimento de identidade de alunos.
-  * Gravação durante intervalos, recreios ou conversas privadas antes/depois da aula.
+  - Gravação de vídeo ou captura de imagens dos alunos.
+  - Identificação biométrica por voz para reconhecimento de identidade de alunos.
+  - Gravação durante intervalos, recreios ou conversas privadas antes/depois da aula.
 
 ---
 
@@ -50,14 +51,14 @@ Em observância ao princípio da necessidade e minimização de dados (Art. 6º,
 
 Diferentes categorias de dados possuem ciclos de vida e prazos de retenção independentes:
 
-| Categoria do Dado | Finalidade | Prazo de Retenção | Destinação Final |
-|---|---|---|---|
-| **Áudio Bruto (Raw Audio)** | Processamento inicial e verificação de integridade | **90 dias** corridos | Exclusão definitiva e irrecuperável |
-| **Segmentos de Áudio Processado** | Suporte a correções e auditoria de fala | **90 dias** corridos | Exclusão definitiva |
-| **Transcrições Integrais** | Consulta acadêmica por alunos matriculados | **365 dias** (1 ano letivo) | Anonimização / Arquivamento seguro |
-| **Resumos e Conceitos (IA)** | Material de revisão e apoio ao estudo | **730 dias** (2 anos) | Manutenção no acervo didático |
-| **Eventos Acadêmicos Oficiais** | Histórico de avaliações, prazos e notas | **5 anos** (obrigação regulatória) | Armazenamento de arquivo histórico acadêmico |
-| **Logs de Auditoria do Sistema** | Rastreabilidade e segurança da informação | **5 anos** (Marco Civil da Internet / LGPD) | Armazenamento imutável em cold storage |
+| Categoria do Dado                 | Finalidade                                         | Prazo de Retenção                           | Destinação Final                             |
+| --------------------------------- | -------------------------------------------------- | ------------------------------------------- | -------------------------------------------- |
+| **Áudio Bruto (Raw Audio)**       | Processamento inicial e verificação de integridade | **90 dias** corridos                        | Exclusão definitiva e irrecuperável          |
+| **Segmentos de Áudio Processado** | Suporte a correções e auditoria de fala            | **90 dias** corridos                        | Exclusão definitiva                          |
+| **Transcrições Integrais**        | Consulta acadêmica por alunos matriculados         | **365 dias** (1 ano letivo)                 | Anonimização / Arquivamento seguro           |
+| **Resumos e Conceitos (IA)**      | Material de revisão e apoio ao estudo              | **730 dias** (2 anos)                       | Manutenção no acervo didático                |
+| **Eventos Acadêmicos Oficiais**   | Histórico de avaliações, prazos e notas            | **5 anos** (obrigação regulatória)          | Armazenamento de arquivo histórico acadêmico |
+| **Logs de Auditoria do Sistema**  | Rastreabilidade e segurança da informação          | **5 anos** (Marco Civil da Internet / LGPD) | Armazenamento imutável em cold storage       |
 
 ---
 
@@ -78,6 +79,7 @@ Alunos e professores têm assegurados os seguintes direitos:
 ## 6. Transparência e Sinalização em Sala de Aula
 
 Toda sala equipada com o dispositivo de captura conterá:
+
 1. **Placa de Sinalização Visível:** Informando que o ambiente possui sistema de captura de áudio com finalidade didática.
 2. **Indicador Luminoso no Dispositivo:** LED indicador de status operacional:
    - Verde fixo: Sistema online em modo de espera (não gravando).

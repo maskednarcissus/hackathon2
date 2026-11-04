@@ -1,3 +1,3 @@
-﻿export * from './events';
+export * from './events';
 export * from './recording';
 export * from './transcript';

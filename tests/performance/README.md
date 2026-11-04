@@ -1,4 +1,4 @@
-﻿# Performance Tests
+# Performance Tests
 
 Load and performance benchmarks for critical system paths.
 

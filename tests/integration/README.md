@@ -1,4 +1,4 @@
-﻿# Integration Tests
+# Integration Tests
 
 Integration tests covering service-to-service interactions, database operations, and external API integrations.
 

@@ -1,4 +1,4 @@
-﻿import { z } from 'zod';
+import { z } from 'zod';
 
 export const ExtractionConfidenceSchema = z.object({
   overall: z.number().min(0).max(1),
@@ -28,8 +28,14 @@ export const ExtractedEventSchema = z.object({
   courseId: z.string().uuid(),
   classSectionId: z.string().uuid(),
   institutionId: z.string().uuid(),
-  eventDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  eventTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  eventDate: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional(),
+  eventTime: z
+    .string()
+    .regex(/^\d{2}:\d{2}$/)
+    .optional(),
   sourceRecordingId: z.string().uuid(),
   sourceTranscriptSegmentId: z.string().uuid(),
   confidence: ExtractionConfidenceSchema,

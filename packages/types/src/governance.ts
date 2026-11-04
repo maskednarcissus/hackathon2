@@ -1,4 +1,4 @@
-﻿export interface RecordingPolicy {
+export interface RecordingPolicy {
   id: string;
   institutionId: string;
   name: string;

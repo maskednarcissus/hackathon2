@@ -5,3 +5,7 @@ build/
 *.generated.*
 pnpm-lock.yaml
 .venv/
+
+# Python projects are formatted by ruff
+**/*.py
+.github/

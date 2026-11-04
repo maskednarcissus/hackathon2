@@ -13,16 +13,16 @@ string, `X-Device-Id` / `X-Device-Timestamp` / `X-Device-Signature`, ±300 s clo
 Device keys are resolved through device-management
 `GET /internal/v1/devices/{id}/public-key`; `revoked` / `decommissioned` devices get `403`.
 
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/health` | Health check (public) |
-| `POST` | `/v1/recordings` | Register recording metadata. `201` created, `200` when the same `(deviceId, localRecordingId)` is re-sent, `409` if it was registered with different content or the device/classroom assignment does not match |
-| `GET` | `/v1/recordings/{id}` | Recording session (only for the device that owns it) |
-| `POST` | `/v1/recording-events` | Device-reported `recording.started` / `recording.stopped` → audit + event |
-| `POST` | `/v1/uploads` | Start an upload; an open upload for the same recording is returned (`200`) for resume |
-| `GET` | `/v1/uploads/{id}` | Status and `receivedChunks` |
-| `PUT` | `/v1/uploads/{id}/chunks/{index}` | Raw chunk, header `X-Chunk-SHA256`. Re-sending the same chunk is a no-op; different content for a stored index → `409` |
-| `POST` | `/v1/uploads/{id}/complete` | Assemble, verify size and whole-file SHA-256, store, publish `recording.uploaded`. Missing chunks → `409`; mismatch → `422`, upload `failed`, `upload.failed` published |
+| Method | Path                              | Purpose                                                                                                                                                                                                        |
+| ------ | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET`  | `/health`                         | Health check (public)                                                                                                                                                                                          |
+| `POST` | `/v1/recordings`                  | Register recording metadata. `201` created, `200` when the same `(deviceId, localRecordingId)` is re-sent, `409` if it was registered with different content or the device/classroom assignment does not match |
+| `GET`  | `/v1/recordings/{id}`             | Recording session (only for the device that owns it)                                                                                                                                                           |
+| `POST` | `/v1/recording-events`            | Device-reported `recording.started` / `recording.stopped` → audit + event                                                                                                                                      |
+| `POST` | `/v1/uploads`                     | Start an upload; an open upload for the same recording is returned (`200`) for resume                                                                                                                          |
+| `GET`  | `/v1/uploads/{id}`                | Status and `receivedChunks`                                                                                                                                                                                    |
+| `PUT`  | `/v1/uploads/{id}/chunks/{index}` | Raw chunk, header `X-Chunk-SHA256`. Re-sending the same chunk is a no-op; different content for a stored index → `409`                                                                                         |
+| `POST` | `/v1/uploads/{id}/complete`       | Assemble, verify size and whole-file SHA-256, store, publish `recording.uploaded`. Missing chunks → `409`; mismatch → `422`, upload `failed`, `upload.failed` published                                        |
 
 Validation: `audioFormat` = `wav_pcm_s16le`; `sampleRate` ∈ {16000, 22050, 24000, 32000,
 44100, 48000}; `channels` 1–8; `endedAt > startedAt`; timestamps must carry an offset.
@@ -37,26 +37,26 @@ Audio is stored at `recordings/{institutionId}/{yyyy}/{mm}/{dd}/{recordingSessio
 (use cases), `auth.py` + `signing.py` (device signatures), `models.py`, `ports.py`
 (interfaces) and `adapters/`:
 
-| Port | Development / tests | Production |
-|---|---|---|
-| `ObjectStore` | `EncryptedLocalObjectStore` — streaming AES-256-GCM (`CIENC1` frames bound to key, index and final flag) | `GcsObjectStore` — CMEK (`kms_key_name`), no overwrite |
-| `EventPublisher` | `InMemoryEventPublisher`, `LoggingEventPublisher` | `PubSubEventPublisher` (topic = event type) |
-| `DeviceKeyResolver` | `StaticDeviceKeyResolver` | `HttpDeviceKeyResolver` (60 s cache) |
-| `AuditClient` | `InMemoryAuditClient` | `HttpAuditClient` (`POST {AUDIT_URL}/v1/audit-events`, best effort) |
-| Repositories | in-memory | PostgreSQL (`recording_sessions`, `upload_sessions`, `upload_chunks` — V002) |
+| Port                | Development / tests                                                                                      | Production                                                                   |
+| ------------------- | -------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `ObjectStore`       | `EncryptedLocalObjectStore` — streaming AES-256-GCM (`CIENC1` frames bound to key, index and final flag) | `GcsObjectStore` — CMEK (`kms_key_name`), no overwrite                       |
+| `EventPublisher`    | `InMemoryEventPublisher`, `LoggingEventPublisher`                                                        | `PubSubEventPublisher` (topic = event type)                                  |
+| `DeviceKeyResolver` | `StaticDeviceKeyResolver`                                                                                | `HttpDeviceKeyResolver` (60 s cache)                                         |
+| `AuditClient`       | `InMemoryAuditClient`                                                                                    | `HttpAuditClient` (`POST {AUDIT_URL}/v1/audit-events`, best effort)          |
+| Repositories        | in-memory                                                                                                | PostgreSQL (`recording_sessions`, `upload_sessions`, `upload_chunks` — V002) |
 
 ## Configuration
 
-| Variable | Default | |
-|---|---|---|
-| `AUDIO_STORAGE_BACKEND` | `local` | `local` or `gcs` |
-| `AUDIO_LOCAL_STORAGE_DIR` | `$TMP/ci-audio-ingestion/objects` | shared with audio-processing |
-| `AUDIO_ENCRYPTION_KEY` | ephemeral (logged warning) | base64, 32 bytes |
-| `GCS_AUDIO_BUCKET`, `GCS_KMS_KEY_NAME`, `GCP_PROJECT_ID` | — | for `gcs` / `pubsub` |
-| `EVENT_PUBLISHER` | `log` | `log` or `pubsub` |
-| `DEVICE_MANAGEMENT_URL` | unset → no devices accepted | |
-| `AUDIT_URL` | unset → in-memory | |
-| `UPLOAD_STAGING_DIR` | `$TMP/ci-audio-ingestion/staging` | in-flight chunks |
+| Variable                                                 | Default                           |                              |
+| -------------------------------------------------------- | --------------------------------- | ---------------------------- |
+| `AUDIO_STORAGE_BACKEND`                                  | `local`                           | `local` or `gcs`             |
+| `AUDIO_LOCAL_STORAGE_DIR`                                | `$TMP/ci-audio-ingestion/objects` | shared with audio-processing |
+| `AUDIO_ENCRYPTION_KEY`                                   | ephemeral (logged warning)        | base64, 32 bytes             |
+| `GCS_AUDIO_BUCKET`, `GCS_KMS_KEY_NAME`, `GCP_PROJECT_ID` | —                                 | for `gcs` / `pubsub`         |
+| `EVENT_PUBLISHER`                                        | `log`                             | `log` or `pubsub`            |
+| `DEVICE_MANAGEMENT_URL`                                  | unset → no devices accepted       |                              |
+| `AUDIT_URL`                                              | unset → in-memory                 |                              |
+| `UPLOAD_STAGING_DIR`                                     | `$TMP/ci-audio-ingestion/staging` | in-flight chunks             |
 
 ## Development
 

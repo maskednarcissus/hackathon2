@@ -1,4 +1,4 @@
-﻿# Operations Documentation
+# Operations Documentation
 
 Runbooks, on-call guides and operational procedures.
 

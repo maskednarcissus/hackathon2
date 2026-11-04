@@ -1,4 +1,4 @@
-﻿# Group Intelligence Service
+# Group Intelligence Service
 
 ## Responsibilities
 

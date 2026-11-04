@@ -10,6 +10,7 @@
 ## Context
 
 The Classroom Intelligence platform serves large educational holding companies (e.g., hundreds of campuses, thousands of daily classes). The data layer must handle:
+
 1. **Transactional integrity:** Multi-level academic hierarchies, class scheduling, event confirmations, calendar synchronizations, and immutable audit logs.
 2. **Flexible intelligence storage:** Lecture outlines, extracted concepts, timestamps, and JSON-based event metadata.
 3. **Data governance & compliance:** LGPD compliance requires granular retention policies (e.g., raw audio retention vs. transcript retention vs. official academic records) and reliable deletion/anonymization workflows.
@@ -20,6 +21,7 @@ The Classroom Intelligence platform serves large educational holding companies (
 ## Decision
 
 We adopt a **two-tier data architecture**:
+
 1. **Operational Database:** **PostgreSQL 16** (locally and in staging) and **Google Cloud AlloyDB for PostgreSQL** in production.
    - Relational modeling with UUID primary keys.
    - Strict foreign key constraints with `ON DELETE RESTRICT` for primary academic artifacts and `ON DELETE CASCADE` only for direct segment children.
@@ -34,12 +36,14 @@ We adopt a **two-tier data architecture**:
 ## Consequences
 
 ### Positive
+
 - Full ACID compliance protects academic event confirmations, calendar dates, and schedule conflicts.
 - AlloyDB provides up to 4x transactional throughput and 100x analytical query speed over standard Cloud SQL PostgreSQL while maintaining 100% PostgreSQL engine compatibility.
 - Clear boundary prevents heavy analytical queries from starving operational API transactions.
 - Native PostgreSQL JSONB and pgvector support allow seamless future vector search experiments without introducing separate niche databases.
 
 ### Negative / Trade-offs
+
 - Requires running database migrations in PostgreSQL and schema synchronizations to BigQuery.
 - Multi-tenant data segregation relies on `tenant_institution_id` / row-level security or application-level tenant context rather than physical database separation.
 

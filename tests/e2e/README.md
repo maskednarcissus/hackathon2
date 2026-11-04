@@ -1,4 +1,4 @@
-﻿# End-to-End Tests
+# End-to-End Tests
 
 E2E tests covering critical user journeys across all three web applications.
 
