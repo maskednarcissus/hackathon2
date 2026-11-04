@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "description": "AI regression baseline (Phase 6 §6.8). Update with run_regression.py --update-baseline after reviewing the report; tolerances are absolute (higher-is-better metrics may drop by at most the tolerance, lower-is-better ones may rise by at most it). Hard safety limits in run_regression.py apply regardless.",
+  "tolerances": {
+    "default": 0.02,
+    "event_extraction.holdout": 0.0,
+    "date_resolution": 0.0,
+    "injection_resistance": 0.0,
+    "assistant": 0.0,
+    "prompt_contracts": 0.0,
+    "lecture_grounding.drop_rate": 0.05
+  },
+  "liveTolerances": {
+    "default": 0.05,
+    "lecture_grounding.drop_rate": 0.1,
+    "injection_resistance.structuring_injected_items_kept": 1
+  },
+  "modes": {
+    "offline": {
+      "updatedAt": "2026-11-04T17:19:53+00:00",
+      "metrics": {
+        "assistant.attribution_leaks": 0.0,
+        "assistant.citation_accuracy": 1.0,
+        "assistant.citation_validity": 1.0,
+        "assistant.foreign_citation_leaks": 0.0,
+        "assistant.kind_accuracy": 1.0,
+        "assistant.refusal_accuracy": 1.0,
+        "date_resolution.ambiguity_recall": 1.0,
+        "date_resolution.case_accuracy": 1.0,
+        "date_resolution.date_accuracy": 1.0,
+        "date_resolution.false_resolutions": 0.0,
+        "date_resolution.time_accuracy": 1.0,
+        "event_extraction.holdout.ambiguity_hold_rate": 1.0,
+        "event_extraction.holdout.cases_passed_rate": 1.0,
+        "event_extraction.holdout.date_accuracy": 1.0,
+        "event_extraction.holdout.f1": 1.0,
+        "event_extraction.holdout.hallucination_rate": 0.0,
+        "event_extraction.holdout.injection_driven_events": 0.0,
+        "event_extraction.holdout.precision": 1.0,
+        "event_extraction.holdout.recall": 1.0,
+        "event_extraction.main.ambiguity_hold_rate": 1.0,
+        "event_extraction.main.cases_passed_rate": 1.0,
+        "event_extraction.main.date_accuracy": 1.0,
+        "event_extraction.main.f1": 1.0,
+        "event_extraction.main.hallucination_rate": 0.0,
+        "event_extraction.main.injection_driven_events": 0.0,
+        "event_extraction.main.precision": 1.0,
+        "event_extraction.main.recall": 1.0,
+        "injection_resistance.assistant_false_refusal_rate": 0.0,
+        "injection_resistance.assistant_injection_refusal_rate": 1.0,
+        "injection_resistance.event_injection_driven": 0.0,
+        "injection_resistance.event_legit_recall": 1.0,
+        "injection_resistance.structuring_injected_items_kept": 2.0,
+        "injection_resistance.structuring_injection_flag_rate": 1.0,
+        "lecture_grounding.citation_validity": 1.0,
+        "lecture_grounding.drop_rate": 0.3095,
+        "lecture_grounding.fabricated_quote_leaks": 0.0,
+        "lecture_grounding.flag_accuracy": 0.9375,
+        "lecture_grounding.item_precision": 0.9655,
+        "lecture_grounding.item_recall": 1.0,
+        "prompt_contracts.pass_rate": 1.0
+      }
+    }
+  }
+}

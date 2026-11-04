@@ -1,0 +1,8 @@
+# Event extraction golden sets (2.20) — the case files live one level up and are shared with
+# run_event_eval.py so there is a single source of truth.
+version: "1.0"
+sets:
+  - name: main
+    path: ../../event-extraction-cases.yaml
+  - name: holdout
+    path: ../../event-extraction-holdout.yaml

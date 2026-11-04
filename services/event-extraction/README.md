@@ -76,6 +76,17 @@ conflicts. Sections without a known professor go to `awaiting_admin`.
 | `PUBSUB_PROJECT_ID` | Google Pub/Sub publisher (extra `gcp`) when no `EVENT_BUS_URL` |
 | `INTERNAL_API_TOKEN` | Required as `x-internal-token` on `/internal/*` and the push endpoint (and sent on outgoing calls); unset → open, warning logged |
 
+## Languages (Phase 6 · 6.4)
+
+Keyword families, the date resolver and the `event-extraction` prompt are pt-BR only. The
+language comes from the request (`language`), the transcript (`language`) or the segments (the
+language covering most of the audio). Anything other than `pt-BR`/`pt` is **skipped**: no events,
+`skipped: true`, `limitation: {code: "unsupported_language", language, message}`,
+`validation.reasons.unsupported_language = 1`, audit `event.extraction_skipped`, and
+`events.extracted` with `skipped: true` — so announcements in other languages never produce
+false positives and are visible as a recorded limitation. Bus deliveries answer
+`{"status": "skipped", "limitation": …}` and are acknowledged.
+
 ## Integration stage
 
 * **Persistence** (`adapters/postgres.py`): `extracted_events` (V001 + V003 columns),

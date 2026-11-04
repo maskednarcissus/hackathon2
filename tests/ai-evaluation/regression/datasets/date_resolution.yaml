@@ -1,0 +1,69 @@
+# Golden set for the deterministic pt-BR date resolver (event-extraction/dates.py, 2.9/2.10).
+# expected.date null + ambiguous true = must be held without a date (never guessed).
+version: "1.0"
+contexts:
+  tue: { class_date: "2026-03-10", upcoming: ["2026-03-17", "2026-03-24", "2026-03-31"] }
+  wed: { class_date: "2026-11-04", upcoming: ["2026-11-11", "2026-11-18", "2026-11-25"] }
+  twice_a_week: { class_date: "2026-03-10", upcoming: ["2026-03-12", "2026-03-17", "2026-03-19"] }
+  no_calendar: { class_date: "2026-03-10", upcoming: [] }
+cases:
+  # absolute
+  - { id: abs-day-month, ctx: tue, text: "a prova será no dia 20 de novembro", expected: { date: "2026-11-20", method: absolute } }
+  - { id: abs-same-month, ctx: tue, text: "prova em 15 de março", expected: { date: "2026-03-15", method: absolute } }
+  - { id: abs-year-rollover, ctx: wed, text: "entrega em 15 de janeiro", expected: { date: "2027-01-15", method: absolute } }
+  - { id: abs-explicit-year, ctx: tue, text: "o TCC é no dia 30 de junho de 2026", expected: { date: "2026-06-30", method: absolute } }
+  - { id: abs-numeric, ctx: tue, text: "prova no dia 15/04", expected: { date: "2026-04-15", method: absolute } }
+  - { id: abs-numeric-year, ctx: tue, text: "prova 15/4/26", expected: { date: "2026-04-15", method: absolute } }
+  - { id: abs-numeric-full-year, ctx: wed, text: "relatório até 05/12/2026", expected: { date: "2026-12-05", method: absolute } }
+  - { id: abs-dia-only, ctx: tue, text: "trabalho para o dia 20", expected: { date: "2026-03-20", method: absolute } }
+  - { id: abs-dia-only-next-month, ctx: wed, text: "relatório para o dia 2", expected: { date: "2026-12-02", method: absolute } }
+  - { id: abs-next-month-day, ctx: tue, text: "entrega no dia 10 do mês que vem", expected: { date: "2026-04-10", method: absolute } }
+  - { id: abs-number-words, ctx: tue, text: "no dia vinte e cinco de maio", expected: { date: "2026-05-25", method: absolute } }
+  - { id: abs-primeiro, ctx: wed, text: "a entrega é primeiro de dezembro", expected: { date: "2026-12-01", method: absolute } }
+  # relative
+  - { id: rel-tomorrow, ctx: tue, text: "amanhã tem quiz", expected: { date: "2026-03-11", method: relative } }
+  - { id: rel-day-after, ctx: tue, text: "depois de amanhã", expected: { date: "2026-03-12", method: relative } }
+  - { id: rel-today, ctx: tue, text: "a lista é para hoje", expected: { date: "2026-03-10", method: relative } }
+  - { id: rel-two-weeks, ctx: tue, text: "daqui a duas semanas", expected: { date: "2026-03-24", method: relative } }
+  - { id: rel-15-days, ctx: tue, text: "em 15 dias", expected: { date: "2026-03-25", method: relative } }
+  - { id: rel-one-week, ctx: wed, text: "daqui a uma semana", expected: { date: "2026-11-11", method: relative } }
+  # next class / next week
+  - { id: next-class, ctx: tue, text: "na próxima aula", expected: { date: "2026-03-17", method: next_class } }
+  - { id: next-class-alt, ctx: tue, text: "para a aula que vem", expected: { date: "2026-03-17", method: next_class } }
+  - { id: next-class-twice-week, ctx: twice_a_week, text: "na próxima aula", expected: { date: "2026-03-12", method: next_class } }
+  - { id: next-week-single-class, ctx: tue, text: "semana que vem", expected: { date: "2026-03-17", method: next_class } }
+  # weekdays
+  - { id: wd-next-monday, ctx: tue, text: "na próxima segunda-feira", expected: { date: "2026-03-16", method: weekday } }
+  - { id: wd-friday-que-vem, ctx: tue, text: "sexta que vem", expected: { date: "2026-03-13", method: weekday } }
+  - { id: wd-next-week-wed, ctx: tue, text: "na quarta da semana que vem", expected: { date: "2026-03-18", method: weekday } }
+  - { id: wd-next-week-comma, ctx: tue, text: "semana que vem, na quinta", expected: { date: "2026-03-19", method: weekday } }
+  - { id: wd-saturday-with-date, ctx: tue, text: "no sábado, dia 21 de março", expected: { date: "2026-03-21", method: absolute } }
+  - { id: wd-nessa-sexta, ctx: wed, text: "o quiz é nessa sexta", expected: { date: "2026-11-06", method: weekday } }
+  # change of date
+  - { id: change-from-to, ctx: tue, text: "foi remarcada do dia 24 de março para o dia 26 de março", expected: { date: "2026-03-26" } }
+  - { id: change-fica-para, ctx: tue, text: "o prazo que era dia 12 agora fica para dia 19", expected: { date: "2026-03-19" } }
+  # times
+  - { id: time-19h, ctx: tue, text: "amanhã às 19h", expected: { date: "2026-03-11", time: "19:00" } }
+  - { id: time-19h30, ctx: tue, text: "amanhã 19h30", expected: { date: "2026-03-11", time: "19:30" } }
+  - { id: time-noite, ctx: tue, text: "amanhã às 7 da noite", expected: { date: "2026-03-11", time: "19:00" } }
+  - { id: time-manha, ctx: tue, text: "amanhã às 8 da manhã", expected: { date: "2026-03-11", time: "08:00" } }
+  - { id: time-colon, ctx: tue, text: "amanhã às 14:15", expected: { date: "2026-03-11", time: "14:15" } }
+  - { id: time-noon, ctx: tue, text: "amanhã ao meio dia", expected: { date: "2026-03-11", time: "12:00" } }
+  # ambiguous — must not resolve
+  - { id: amb-end-next-month, ctx: tue, text: "lá para o final do mês que vem", expected: { date: null, ambiguous: true } }
+  - { id: amb-next-month, ctx: tue, text: "a prova vai ser mês que vem", expected: { date: null, ambiguous: true } }
+  - { id: amb-after-holiday, ctx: tue, text: "depois do feriado", expected: { date: null, ambiguous: true } }
+  - { id: amb-soon, ctx: tue, text: "em breve", expected: { date: null, ambiguous: true } }
+  - { id: amb-month-only, ctx: tue, text: "lá pra dezembro", expected: { date: null, ambiguous: true } }
+  - { id: amb-end-semester, ctx: tue, text: "no fim do semestre", expected: { date: null, ambiguous: true } }
+  - { id: amb-to-define, ctx: tue, text: "data a definir", expected: { date: null, ambiguous: true } }
+  - { id: amb-two-dates, ctx: tue, text: "a prova é dia 20 ou dia 27", expected: { date: null, ambiguous: true } }
+  - { id: amb-invalid-date, ctx: tue, text: "prova dia 31 de fevereiro", expected: { date: null, ambiguous: true } }
+  - { id: amb-next-class-no-calendar, ctx: no_calendar, text: "na próxima aula", expected: { date: null, ambiguous: true } }
+  - { id: amb-next-week-two-classes, ctx: twice_a_week, text: "prova semana que vem", expected: { date: null, ambiguous: true } }
+  - { id: amb-in-month, ctx: tue, text: "o seminário será em maio", expected: { date: null, ambiguous: true } }
+  # no temporal reference
+  - { id: none-ordinal, ctx: tue, text: "a segunda prova", expected: { date: null, ambiguous: false } }
+  - { id: none-chatter, ctx: tue, text: "isso cai na prova", expected: { date: null, ambiguous: false } }
+  # past
+  - { id: past-recent, ctx: tue, text: "a entrega era dia 3 de março", expected: { date: "2026-03-03", past: true } }

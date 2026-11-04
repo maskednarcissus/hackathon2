@@ -1,0 +1,193 @@
+# Lecture structuring grounding (2.3–2.7, 2.21). Each case scripts the model output (offline) —
+# a mix of grounded items and typical hallucinations — and lists what must survive validation.
+# In --live mode the model output comes from the real model; only the invariant metrics
+# (citation validity, fabricated quotes, drop rate) are computed.
+version: "1.0"
+cases:
+  - id: macro-inflation
+    course: Macroeconomia
+    segments:
+      - "Bom dia, turma. Hoje vamos falar sobre inflação e política monetária."
+      - "Inflação é o aumento generalizado e persistente do nível de preços da economia."
+      - "O Banco Central usa a taxa Selic como principal instrumento de política monetária."
+      - "Quando a Selic sobe, o crédito fica mais caro e a demanda agregada diminui."
+      - "Aluno: professor, a Selic alta sempre reduz a inflação? Depende das expectativas."
+      - "Para a próxima semana leiam o capítulo cinco do livro Macroeconomia do Mankiw."
+    model_output:
+      title: "Inflação e política monetária"
+      executiveSummary: 'A aula introduziu a inflação e o papel da taxa Selic. O professor afirmou que "o Brasil terá deflação em 2027".'
+      topics:
+        - { title: "Conceito de inflação", segmentIndexes: [1] }
+        - { title: "Taxa Selic e política monetária", segmentIndexes: [2, 3] }
+        - { title: "Criptomoedas e blockchain", segmentIndexes: [2] }
+        - { title: "Tópico fantasma", segmentIndexes: [999] }
+      concepts:
+        - { term: "Inflação", definition: "Aumento generalizado e persistente do nível de preços.", segmentIndexes: [1] }
+        - { term: "Curva de Phillips", definition: "Relação inversa entre inflação e desemprego.", segmentIndexes: [1] }
+        - { term: "Taxa Selic", definition: "Instrumento do Banco Central.", segmentIndexes: [] }
+      questions:
+        - { question: "A Selic alta sempre reduz a inflação?", answer: "Depende das expectativas.", askedBy: student, segmentIndexes: [4] }
+        - { question: "Qual é o PIB da Argentina?", askedBy: student, segmentIndexes: [4] }
+      readingReferences:
+        - { title: "Macroeconomia", authors: "Mankiw", type: book, segmentIndexes: [5] }
+        - { title: "O Capital", authors: "Karl Marx", type: book, segmentIndexes: [5] }
+    expected:
+      topics: ["Conceito de inflação", "Taxa Selic e política monetária"]
+      concepts: ["Inflação"]
+      questions: ["A Selic alta sempre reduz a inflação?"]
+      readingReferences: ["Macroeconomia"]
+      flags:
+        executiveSummary: fabricated_quote
+        "topics[2]": ungrounded
+        "topics[3]": invalid_segment_reference
+        "concepts[1]": ungrounded
+        "concepts[2]": missing_citation
+        "questions[1]": ungrounded
+        "readingReferences[1]": ungrounded
+
+  - id: biology-photosynthesis
+    course: Biologia Celular
+    # KNOWN ISSUE (baseline records it): topic titles only need one supported token, so
+    # "Divisão celular por mitose" survives because "celular" occurs in segment 4.
+    segments:
+      - "Hoje o tema é a fotossíntese e a respiração celular."
+      - "A fotossíntese ocorre nos cloroplastos e usa a clorofila para captar a luz."
+      - "Na fase clara há produção de ATP e liberação de oxigênio."
+      - "No ciclo de Calvin o gás carbônico é fixado e forma glicose."
+      - "A respiração celular acontece nas mitocôndrias e libera energia da glicose."
+      - "Leiam o capítulo oito do livro Biologia Celular do Alberts."
+    model_output:
+      title: "Fotossíntese e respiração celular"
+      executiveSummary: "Aula sobre fotossíntese, ciclo de Calvin e respiração celular."
+      topics:
+        - { title: "Fotossíntese nos cloroplastos", segmentIndexes: [1, 2] }
+        - { title: "Ciclo de Calvin", segmentIndexes: [3] }
+        - { title: "Respiração celular", segmentIndexes: [4] }
+        - { title: "Divisão celular por mitose", segmentIndexes: [4] }
+      concepts:
+        - { term: "Clorofila", definition: "Pigmento usado para captar a luz na fotossíntese.", segmentIndexes: [1] }
+        - { term: "Ciclo de Calvin", definition: "Etapa em que o gás carbônico é fixado e forma glicose.", segmentIndexes: [3] }
+        - { term: "Mitocôndria", definition: "Organela onde acontece a respiração celular.", segmentIndexes: [4] }
+        - { term: "Ribossomo", definition: "Organela de síntese proteica.", segmentIndexes: [4] }
+      questions: []
+      readingReferences:
+        - { title: "Biologia Celular", authors: "Alberts", type: book, segmentIndexes: [5] }
+        - { title: "Biologia Molecular do Gene", authors: "Watson", type: book, segmentIndexes: [5] }
+    expected:
+      topics: ["Fotossíntese nos cloroplastos", "Ciclo de Calvin", "Respiração celular"]
+      concepts: ["Clorofila", "Ciclo de Calvin", "Mitocôndria"]
+      questions: []
+      readingReferences: ["Biologia Celular"]
+      flags:
+        "topics[3]": ungrounded
+        "concepts[3]": ungrounded
+        "readingReferences[1]": ungrounded
+
+  - id: law-constitution
+    course: Direito Constitucional
+    segments:
+      - "Vamos estudar os direitos fundamentais na Constituição de 1988."
+      - "O artigo quinto garante a igualdade de todos perante a lei."
+      - "O habeas corpus protege a liberdade de locomoção contra ilegalidade ou abuso de poder."
+      - "Aluna: o mandado de segurança serve para quê? Para proteger direito líquido e certo."
+      - "Para a próxima aula, leiam o capítulo três do Curso de Direito Constitucional do Gilmar Mendes."
+    model_output:
+      title: "Direitos fundamentais"
+      executiveSummary: "Direitos fundamentais na Constituição de 1988, habeas corpus e mandado de segurança."
+      topics:
+        - { title: "Direitos fundamentais na Constituição", segmentIndexes: [0, 1] }
+        - { title: "Habeas corpus", segmentIndexes: [2] }
+        - { title: "Controle de constitucionalidade difuso", segmentIndexes: [2] }
+      concepts:
+        - { term: "Habeas corpus", definition: "Protege a liberdade de locomoção contra ilegalidade ou abuso de poder.", segmentIndexes: [2] }
+        - { term: "Mandado de segurança", definition: "Protege direito líquido e certo.", segmentIndexes: [3] }
+        - { term: "Ação direta de inconstitucionalidade", definition: "Controle concentrado.", segmentIndexes: [3] }
+      questions:
+        - { question: "O mandado de segurança serve para quê?", answer: "Para proteger direito líquido e certo.", askedBy: student, segmentIndexes: [3] }
+      readingReferences:
+        - { title: "Curso de Direito Constitucional", authors: "Gilmar Mendes", type: book, segmentIndexes: [4] }
+    expected:
+      topics: ["Direitos fundamentais na Constituição", "Habeas corpus"]
+      concepts: ["Habeas corpus", "Mandado de segurança"]
+      questions: ["O mandado de segurança serve para quê?"]
+      readingReferences: ["Curso de Direito Constitucional"]
+      flags:
+        "topics[2]": ungrounded
+        "concepts[2]": ungrounded
+
+  - id: engineering-wrong-citations
+    course: Resistência dos Materiais
+    segments:
+      - "Hoje vamos ver tensão normal e deformação."
+      - "A tensão normal é a força dividida pela área da seção transversal."
+      - "A lei de Hooke relaciona tensão e deformação pelo módulo de elasticidade."
+    model_output:
+      title: "Tensão e deformação"
+      executiveSummary: "Tensão normal e lei de Hooke."
+      topics:
+        - { title: "Tensão normal", segmentIndexes: [1] }
+        - { title: "Lei de Hooke", segmentIndexes: [] }
+        - { title: "Lei de Hooke", segmentIndexes: [7, 8] }
+      concepts:
+        - { term: "Tensão normal", definition: "Força dividida pela área da seção transversal.", segmentIndexes: [1] }
+        - { term: "Módulo de elasticidade", definition: "Relaciona tensão e deformação na lei de Hooke.", segmentIndexes: [2] }
+        - { term: "Coeficiente de Poisson", definition: "Razão entre deformações.", segmentIndexes: [2] }
+      questions: []
+      readingReferences: []
+    expected:
+      topics: ["Tensão normal"]
+      concepts: ["Tensão normal", "Módulo de elasticidade"]
+      questions: []
+      readingReferences: []
+      flags:
+        "topics[1]": missing_citation
+        "topics[2]": invalid_segment_reference
+        "concepts[2]": ungrounded
+
+  - id: history-fabricated-quotes
+    course: História do Brasil
+    segments:
+      - "A Proclamação da República aconteceu em 1889."
+      - "O marechal Deodoro da Fonseca liderou o movimento militar."
+      - "A Constituição de 1891 instituiu o federalismo e o presidencialismo."
+    model_output:
+      title: "Proclamação da República"
+      executiveSummary: 'A aula tratou da Proclamação da República em 1889. O professor disse que "Deodoro era contra a República".'
+      topics:
+        - { title: "Proclamação da República", segmentIndexes: [0, 1] }
+        - { title: "Constituição de 1891", segmentIndexes: [2] }
+      concepts:
+        - { term: "Federalismo", definition: "Instituído pela Constituição de 1891.", segmentIndexes: [2] }
+      questions: []
+      readingReferences: []
+    expected:
+      topics: ["Proclamação da República", "Constituição de 1891"]
+      concepts: ["Federalismo"]
+      questions: []
+      readingReferences: []
+      flags:
+        executiveSummary: fabricated_quote
+
+  - id: all-grounded
+    course: Química Geral
+    segments:
+      - "Hoje vamos falar de ligações químicas."
+      - "Na ligação iônica há transferência de elétrons entre metal e ametal."
+      - "Na ligação covalente os átomos compartilham pares de elétrons."
+    model_output:
+      title: "Ligações químicas"
+      executiveSummary: "Ligações iônicas e covalentes."
+      topics:
+        - { title: "Ligação iônica", segmentIndexes: [1] }
+        - { title: "Ligação covalente", segmentIndexes: [2] }
+      concepts:
+        - { term: "Ligação iônica", definition: "Transferência de elétrons entre metal e ametal.", segmentIndexes: [1] }
+        - { term: "Ligação covalente", definition: "Átomos compartilham pares de elétrons.", segmentIndexes: [2] }
+      questions: []
+      readingReferences: []
+    expected:
+      topics: ["Ligação iônica", "Ligação covalente"]
+      concepts: ["Ligação iônica", "Ligação covalente"]
+      questions: []
+      readingReferences: []
+      flags: {}

@@ -51,6 +51,10 @@ def _check_kind(kind: str) -> None:
         )
 
 
+def _str_or_none(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
 def parse_delivery(body: dict[str, Any]) -> tuple[LifecycleEnvelope, str | None]:
     """Accept a raw envelope or a Pub/Sub push body; return (envelope, idempotency id)."""
     message = body.get("message")
@@ -202,11 +206,19 @@ def create_app(deps: Dependencies) -> FastAPI:
                 scheduled_class_id=scheduled_class_id,
                 segments=transcript.segments if transcript else None,
                 recording_session_id=transcript.recording_session_id if transcript else None,
+                language=_str_or_none(envelope.data.get("language"))
+                or (transcript.language if transcript else None),
             )
         )
         await deps.processed.mark_processed(transcript_key, CONSUMER)
         if delivery_id:
             await deps.processed.mark_processed(delivery_id, CONSUMER)
+        if result.skipped and result.limitation is not None:
+            return {
+                "status": "skipped",
+                "limitation": result.limitation.model_dump(by_alias=True),
+                "eventIds": [],
+            }
         return {
             "status": "processed",
             "eventIds": [e.id for e in result.events],

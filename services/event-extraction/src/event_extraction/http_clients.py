@@ -236,6 +236,7 @@ class HttpTranscriptClient:
             recording_session_id=t.get("recordingSessionId"),
             scheduled_class_id=t.get("scheduledClassId"),
             segments=[TranscriptSegment.model_validate(s) for s in raw_segments],
+            language=t.get("language"),
         )
 
 

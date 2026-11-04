@@ -22,7 +22,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import yaml
 
@@ -146,7 +146,7 @@ async def run_case(
             PublicationPolicy(auto_publish=True, auto_publish_min_confidence=0.92)
         ),
         gateway=gateway,
-        extractor=extractor,
+        extractor=cast(Any, extractor),
     )
     service = EventExtractionService(deps)
     predicted: list[ExtractedEvent] = []
@@ -252,7 +252,8 @@ def _score(
     for i in remaining:
         res.false_positives += 1
         res.assertion_failures.append(
-            f"unexpected {predicted[i].type} {predicted[i].event_date}: {predicted[i].source.quote!r}"
+            f"unexpected {predicted[i].type} {predicted[i].event_date}: "
+            f"{predicted[i].source.quote!r}"
         )
 
     for exp, got in pairs:

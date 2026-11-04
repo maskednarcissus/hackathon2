@@ -198,6 +198,15 @@ class ExtractionRequest(CamelModel):
     recording_session_id: str | None = None
     segments: list[TranscriptSegment] | None = None
     extractor: ExtractorKind | None = None
+    language: str | None = None
+
+
+class Limitation(CamelModel):
+    """Why an extraction was not performed (Phase 6 §6.4: pt-BR only, no false positives)."""
+
+    code: Literal["unsupported_language"]
+    language: str
+    message: str
 
 
 class ValidationStats(CamelModel):
@@ -223,6 +232,9 @@ class ExtractionResult(CamelModel):
     awaiting_review: int
     published: int
     injection_suspected: bool = False
+    language: str = "pt-BR"
+    skipped: bool = False
+    limitation: Limitation | None = None
 
 
 class ActionBody(CamelModel):

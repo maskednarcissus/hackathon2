@@ -34,6 +34,12 @@ ambiguous cases held, 0 injection-driven events, 0 hallucinations.
 > transcripts are needed before claiming production accuracy. The LLM path is only measured
 > when a gateway with model credentials is available (`--extractor llm`).
 
+## Regression suite (Phase 6 · deliverable 6.8)
+
+See [`regression/`](./regression/README.md): golden datasets for event extraction, date
+resolution, injection resistance, lecture-structuring grounding, assistant citations/refusals and
+prompt contracts, scored against a committed baseline in CI (`.github/workflows/ai-regression.yml`).
+
 ## Still planned
 
 - Brazilian Portuguese transcription benchmarks (`tests/audio-evaluation`)

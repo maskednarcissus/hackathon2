@@ -28,6 +28,7 @@ from .models import (
     ExtractionRequest,
     ExtractionResult,
     ExtractorKind,
+    Limitation,
     Mention,
     ProposedChange,
     Provenance,
@@ -110,6 +111,23 @@ def _is_specific(title: str) -> bool:
     )
 
 
+SUPPORTED_LANGUAGES = frozenset({"pt-br", "pt"})
+
+
+def is_supported_language(language: str) -> bool:
+    return language.strip().lower().replace("_", "-") in SUPPORTED_LANGUAGES
+
+
+def dominant_language(segments: list[TranscriptSegment]) -> str:
+    """Language covering most transcript time (segments default to pt-BR)."""
+    if not segments:
+        return "pt-BR"
+    weight: dict[str, int] = {}
+    for s in segments:
+        weight[s.language] = weight.get(s.language, 0) + max(1, s.end_ms - s.start_ms)
+    return max(weight.items(), key=lambda kv: kv[1])[0]
+
+
 class EventExtractionService:
     def __init__(self, deps: Dependencies) -> None:
         self.d = deps
@@ -121,11 +139,16 @@ class EventExtractionService:
         ctx = await self.d.academic.get_class_context(req.scheduled_class_id)
         recording_session_id = req.recording_session_id
         segments = req.segments
+        language = req.language
         if segments is None:
             transcript = await self.d.transcripts.get_transcript(req.transcript_id)
             segments = transcript.segments
             recording_session_id = recording_session_id or transcript.recording_session_id
+            language = language or transcript.language
         kind: ExtractorKind = req.extractor or self.d.extractor
+        language = language or dominant_language(segments)
+        if not is_supported_language(language):
+            return await self._skip_unsupported_language(req, ctx, kind, language)
         output = await self._run_extractors(kind, segments, ctx)
         by_index = {s.segment_index: s for s in segments}
 
@@ -251,6 +274,7 @@ class EventExtractionService:
         return ExtractionResult(
             transcript_id=req.transcript_id,
             scheduled_class_id=req.scheduled_class_id,
+            language=language,
             extractor=kind,
             events=result_events,
             deduplicated=dedups,
@@ -258,6 +282,62 @@ class EventExtractionService:
             awaiting_review=awaiting,
             published=published,
             injection_suspected=output.injection_suspected,
+        )
+
+    async def _skip_unsupported_language(
+        self, req: ExtractionRequest, ctx: ClassContext, kind: ExtractorKind, language: str
+    ) -> ExtractionResult:
+        """6.4: keyword families, date resolver and prompts are pt-BR only — never guess."""
+        limitation = Limitation(
+            code="unsupported_language",
+            language=language,
+            message=(
+                f"Event extraction supports pt-BR only; transcript language is {language}. "
+                "No events were extracted — announcements must be entered manually."
+            ),
+        )
+        log.info("skipping event extraction for %s: language %s", req.transcript_id, language)
+        try:
+            await self.d.audit.record(
+                action="event.extraction_skipped",
+                resource_type="transcript",
+                resource_id=req.transcript_id,
+                tenant_id=ctx.institution_id,
+                actor_id=None,
+                actor_type="system",
+                metadata={
+                    "scheduledClassId": ctx.scheduled_class_id,
+                    "classSectionId": ctx.class_section_id,
+                    "reason": limitation.code,
+                    "language": language,
+                },
+            )
+        except Exception:  # audit failures are never fatal
+            log.exception("audit record failed for event.extraction_skipped")
+        await self._emit(
+            "events.extracted",
+            {
+                "transcriptId": req.transcript_id,
+                "scheduledClassId": req.scheduled_class_id,
+                "eventIds": [],
+                "awaitingReview": 0,
+                "skipped": True,
+                "limitation": limitation.code,
+                "language": language,
+            },
+            ctx.institution_id,
+        )
+        return ExtractionResult(
+            transcript_id=req.transcript_id,
+            scheduled_class_id=req.scheduled_class_id,
+            extractor=kind,
+            events=[],
+            validation=ValidationStats(reasons={"unsupported_language": 1}),
+            awaiting_review=0,
+            published=0,
+            language=language,
+            skipped=True,
+            limitation=limitation,
         )
 
     async def _run_extractors(

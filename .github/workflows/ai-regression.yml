@@ -1,0 +1,138 @@
+name: AI Regression
+
+# Phase 6 §6.8 — golden-dataset regression for event extraction, date resolution, injection
+# resistance, lecture structuring grounding, assistant citations/refusals and prompt contracts.
+# PRs run offline (ai-gateway FakeProvider + heuristic extractor, no credentials); the live job
+# runs nightly / on demand against Vertex AI when credentials are configured.
+
+on:
+  pull_request:
+    paths:
+      - 'services/ai-gateway/prompts/**'
+      - 'services/ai-gateway/src/**'
+      - 'services/event-extraction/**'
+      - 'services/lecture-intelligence/**'
+      - 'tests/ai-evaluation/**'
+      - '.github/workflows/ai-regression.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'services/ai-gateway/prompts/**'
+      - 'services/ai-gateway/src/**'
+      - 'services/event-extraction/**'
+      - 'services/lecture-intelligence/**'
+      - 'tests/ai-evaluation/**'
+  schedule:
+    - cron: '17 6 * * *' # nightly, 03:17 America/Sao_Paulo
+  workflow_dispatch:
+    inputs:
+      live:
+        description: 'Also run against live models (requires Vertex credentials)'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-regression-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offline:
+    name: Regression (offline, fake providers)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install services
+        run: |
+          pip install -e "services/ai-gateway[dev]" \
+                      -e "services/event-extraction[dev]" \
+                      -e "services/lecture-intelligence[dev]" \
+                      pyyaml
+      - name: Runner and evaluation tests
+        run: pytest tests/ai-evaluation -v --tb=short
+      - name: Regression vs committed baseline
+        run: |
+          python tests/ai-evaluation/regression/run_regression.py \
+            --output tests/ai-evaluation/regression/results
+      - name: Job summary
+        if: always()
+        run: |
+          f=tests/ai-evaluation/regression/results/regression-offline.md
+          if [ -f "$f" ]; then cat "$f" >> "$GITHUB_STEP_SUMMARY"; fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ai-regression-offline
+          path: tests/ai-evaluation/regression/results/
+          if-no-files-found: ignore
+
+  live:
+    name: Regression (live models)
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.live)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      VERTEX_SA_KEY: ${{ secrets.AI_REGRESSION_GCP_SA_KEY }}
+      GOOGLE_CLOUD_PROJECT: ${{ vars.AI_REGRESSION_GCP_PROJECT }}
+      VERTEX_LOCATION: ${{ vars.AI_REGRESSION_VERTEX_LOCATION || 'southamerica-east1' }}
+    steps:
+      - name: Skip when credentials are not configured
+        if: env.VERTEX_SA_KEY == ''
+        run: echo "::notice::AI_REGRESSION_GCP_SA_KEY is not set — live AI regression skipped."
+      - uses: actions/checkout@v4
+        if: env.VERTEX_SA_KEY != ''
+      - uses: actions/setup-python@v5
+        if: env.VERTEX_SA_KEY != ''
+        with:
+          python-version: '3.12'
+          cache: pip
+      - uses: google-github-actions/auth@v2
+        if: env.VERTEX_SA_KEY != ''
+        with:
+          credentials_json: ${{ secrets.AI_REGRESSION_GCP_SA_KEY }}
+      - name: Install services
+        if: env.VERTEX_SA_KEY != ''
+        run: |
+          pip install -e "services/ai-gateway[gcp]" \
+                      -e "services/event-extraction" \
+                      -e "services/lecture-intelligence" \
+                      pyyaml
+      - name: Start ai-gateway (Vertex provider)
+        if: env.VERTEX_SA_KEY != ''
+        env:
+          AI_GATEWAY_PROVIDER: vertex
+          AI_GATEWAY_DEFAULT_MONTHLY_BUDGET_USD: '20'
+        run: |
+          nohup uvicorn main:app --app-dir services/ai-gateway/src --port 8005 > gateway.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:8005/health && exit 0
+            sleep 2
+          done
+          cat gateway.log; exit 1
+      - name: Live regression
+        if: env.VERTEX_SA_KEY != ''
+        run: |
+          python tests/ai-evaluation/regression/run_regression.py --live \
+            --gateway-url http://localhost:8005 \
+            --output tests/ai-evaluation/regression/results
+      - name: Job summary
+        if: always() && env.VERTEX_SA_KEY != ''
+        run: |
+          f=tests/ai-evaluation/regression/results/regression-live.md
+          if [ -f "$f" ]; then cat "$f" >> "$GITHUB_STEP_SUMMARY"; fi
+      - uses: actions/upload-artifact@v4
+        if: always() && env.VERTEX_SA_KEY != ''
+        with:
+          name: ai-regression-live
+          path: |
+            tests/ai-evaluation/regression/results/
+            gateway.log
+          if-no-files-found: ignore

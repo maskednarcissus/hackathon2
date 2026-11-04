@@ -214,6 +214,7 @@ class TranscriptData:
     recording_session_id: str | None
     scheduled_class_id: str | None
     segments: list[TranscriptSegment]
+    language: str | None = None
 
 
 class TranscriptClient(Protocol):
