@@ -1,6 +1,10 @@
-﻿[project]
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
 name = "ci-audio-processing"
-version = "0.1.0"
+version = "0.2.0"
 description = "Classroom Intelligence — Audio Processing Service"
 requires-python = ">=3.12"
 dependencies = [
@@ -8,21 +12,53 @@ dependencies = [
     "uvicorn[standard]>=0.32.0",
     "pydantic>=2.9.0",
     "structlog>=24.0.0",
+    "cryptography>=43.0.0",
+    "httpx>=0.27.0",
+    "numpy>=2.0.0",
 ]
 
 [project.optional-dependencies]
+gcp = [
+    "google-cloud-storage>=2.18.0",
+    "google-cloud-pubsub>=2.25.0",
+]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
     "httpx>=0.27.0",
-    "ruff>=0.7.0",
+    "ruff==0.7.0",
     "mypy>=1.11.0",
 ]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+py-modules = ["main"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+filterwarnings = ["ignore:Using `httpx` with `starlette.testclient`"]
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
 
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "N", "S", "RUF"]
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "B"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = ["google.*"]
+ignore_missing_imports = true

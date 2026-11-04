@@ -1,14 +1,8 @@
-﻿"""Classroom Intelligence — Audio Ingestion Service."""
-from fastapi import FastAPI
+"""Classroom Intelligence — Audio Ingestion Service (uvicorn entrypoint).
 
-app = FastAPI(
-    title="CI Audio Ingestion Service",
-    description="Receives, validates and stores raw audio uploads from classroom devices. Handles chunked uploads, integrity verification via SHA-256 checksums, and publishes events to downstream processing pipeline.",
-    version="0.1.0",
-)
+Run: ``uvicorn main:app --app-dir src --port 8001``
+"""
 
+from audio_ingestion.app import create_app
 
-@app.get("/health")
-async def health() -> dict[str, str]:
-    """Service health check."""
-    return {"status": "ok", "service": "audio-ingestion"}
+app = create_app()
