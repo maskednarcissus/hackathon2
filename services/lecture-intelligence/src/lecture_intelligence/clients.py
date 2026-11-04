@@ -205,3 +205,26 @@ class HttpSearchClient:
         response.raise_for_status()
         body = response.json()
         return [SearchResult.model_validate(r) for r in body.get("results", [])]
+
+
+class AcademicClient(Protocol):
+    async def get_scheduled_class(self, scheduled_class_id: str) -> dict[str, Any] | None: ...
+
+
+class HttpAcademicClient:
+    """academic-integration ``GET /v1/scheduled-classes/{id}`` (with course and section)."""
+
+    def __init__(self, base_url: str, timeout_s: float = 5.0) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._timeout = timeout_s
+
+    async def get_scheduled_class(self, scheduled_class_id: str) -> dict[str, Any] | None:
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            response = await client.get(
+                f"{self._base_url}/v1/scheduled-classes/{scheduled_class_id}"
+            )
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        body: dict[str, Any] = response.json()
+        return body

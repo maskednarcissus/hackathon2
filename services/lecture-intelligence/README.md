@@ -12,7 +12,8 @@ Port **8006** · Python · FastAPI · calls `ai-gateway` (never a model SDK dire
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` | `/v1/lectures/structure` | Structure a transcript (`institutionId` required for AI cost accounting) |
-| `GET` | `/v1/lectures/{scheduledClassId}` | Latest structure for a class |
+| `GET` | `/v1/lectures?classSectionIds=a,b&q&courseId&from&to&sort&page&pageSize` | Lecture library (`classSectionIds` mandatory; `sort` = `recent`\|`oldest`\|`course`\|`title`, aliases `date_desc`/`date_asc`; `pageSize` ≤ 100) → `{items:[{lectureSummaryId, scheduledClassId, transcriptId, classSectionId, courseId, courseName, classDate, startsAt, title, executiveSummary (≤ 280 chars), topicCount, conceptCount}], page, pageSize, total}` |
+| `GET` | `/v1/lectures/{scheduledClassId}` | Latest structure for a class (includes `classSectionId`, `courseId`, `courseName`, `classDate`, `startsAt` when known) |
 | `POST` | `/v1/assistant/ask` | Academic assistant (3.13/3.14) — grounded, cited answers (see below) |
 | `POST` | `/v1/assistant/feedback` | `{answerId, helpful, comment?, studentId?}` → `201` |
 | `POST` | `/v1/events/transcript-created` · `/v1/events/diarization-completed` | Event handlers (raw envelope or Pub/Sub push); fetch the transcript from transcript-management, structure it, publish `lecture.structured`; duplicate `eventId`s are ignored |
@@ -57,7 +58,7 @@ Port **8006** · Python · FastAPI · calls `ai-gateway` (never a model SDK dire
 ## Configuration
 
 `AI_GATEWAY_URL` (default `http://localhost:8005`), `TRANSCRIPT_MANAGEMENT_URL` (`http://localhost:4008`),
-`AUDIT_SERVICE_URL`, `PUBSUB_PROJECT_ID` (enables Pub/Sub publishing, extra `gcp`), `LECTURE_MAX_CHUNK_TOKENS`.
+`ACADEMIC_INTEGRATION_URL` (`http://localhost:4003`, class/course metadata for event-driven structuring), `AUDIT_SERVICE_URL`, `PUBSUB_PROJECT_ID` (enables Pub/Sub publishing, extra `gcp`), `LECTURE_MAX_CHUNK_TOKENS`.
 
 ## Development
 

@@ -94,6 +94,17 @@ class FakeSearch:
         return list(self.results)
 
 
+class FakeAcademic:
+    def __init__(self) -> None:
+        self.classes: dict[str, dict[str, Any]] = {}
+        self.fail = False
+
+    async def get_scheduled_class(self, scheduled_class_id: str) -> dict[str, Any] | None:
+        if self.fail:
+            raise RuntimeError("academic down")
+        return self.classes.get(scheduled_class_id)
+
+
 def make_segments(texts: list[str], seconds_each: int = 10) -> list[dict[str, Any]]:
     return [
         {
@@ -116,6 +127,7 @@ class Harness:
         self.publisher = InMemoryEventPublisher()
         self.audit = InMemoryAuditClient()
         self.search = FakeSearch()
+        self.academic = FakeAcademic()
         self.client = TestClient(
             create_app(
                 LectureDeps(
@@ -126,6 +138,7 @@ class Harness:
                     audit=self.audit,
                     settings=PipelineSettings(max_chunk_tokens=max_chunk_tokens),
                     search=self.search,
+                    academic=self.academic,
                 )
             )
         )

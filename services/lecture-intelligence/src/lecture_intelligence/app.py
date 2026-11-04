@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import structlog
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
@@ -21,10 +21,13 @@ from lecture_intelligence.assistant import (
     AssistantSettings,
     InMemoryAssistantRepository,
 )
+from lecture_intelligence.catalog import SORT_PATTERN, list_lectures, resolve_class_metadata
 from lecture_intelligence.clients import (
+    AcademicClient,
     AuditClient,
     EventPublisher,
     GatewayClient,
+    HttpAcademicClient,
     HttpAuditClient,
     HttpGatewayClient,
     HttpSearchClient,
@@ -51,6 +54,7 @@ class LectureDeps:
     audit: AuditClient = field(default_factory=InMemoryAuditClient)
     settings: PipelineSettings = field(default_factory=PipelineSettings)
     search: SearchClient | None = None
+    academic: AcademicClient | None = None
     assistant_repository: AssistantRepository = field(default_factory=InMemoryAssistantRepository)
     assistant_settings: AssistantSettings = field(default_factory=AssistantSettings)
 
@@ -67,6 +71,9 @@ def deps_from_env() -> LectureDeps:
         gateway=HttpGatewayClient(os.environ.get("AI_GATEWAY_URL", "http://localhost:8005")),
         transcripts=HttpTranscriptClient(transcript_url),
         search=HttpSearchClient(transcript_url),
+        academic=HttpAcademicClient(
+            os.environ.get("ACADEMIC_INTEGRATION_URL", "http://localhost:4003")
+        ),
         publisher=publisher,
         audit=HttpAuditClient(audit_url) if audit_url else InMemoryAuditClient(),
         settings=PipelineSettings(
@@ -145,6 +152,33 @@ def create_app(deps: LectureDeps | None = None) -> FastAPI:
     async def structure(body: StructureRequest) -> dict[str, Any]:
         return (await structurer.structure(body)).to_json()
 
+    @app.get("/v1/lectures")
+    async def list_lecture_library(
+        class_section_ids: str | None = Query(default=None, alias="classSectionIds"),
+        q: str | None = Query(default=None, max_length=200),
+        course_id: str | None = Query(default=None, alias="courseId"),
+        start: str | None = Query(default=None, alias="from", max_length=40),
+        end: str | None = Query(default=None, alias="to", max_length=40),
+        sort: str = Query(default="recent", pattern=SORT_PATTERN),
+        page: int = Query(default=1, ge=1),
+        page_size: int = Query(default=20, ge=1, le=100, alias="pageSize"),
+    ) -> dict[str, Any]:
+        sections = {s.strip() for s in (class_section_ids or "").split(",") if s.strip()}
+        if not sections:
+            raise PipelineError(
+                "validation_error", "classSectionIds is required (comma-separated)", 400
+            )
+        return list_lectures(
+            deps.repository.latest_for_sections(sections),
+            query=q,
+            course_id=course_id,
+            start=start,
+            end=end,
+            sort=sort,
+            page=page,
+            page_size=page_size,
+        )
+
     @app.get("/v1/lectures/{scheduled_class_id}")
     async def get_lecture(scheduled_class_id: str) -> JSONResponse:
         found = deps.repository.latest_for_class(scheduled_class_id)
@@ -186,13 +220,13 @@ def create_app(deps: LectureDeps | None = None) -> FastAPI:
         if not scheduled_class_id or not segments:
             log.info("lecture_skipped", transcript_id=transcript_id, reason="no class or segments")
             return JSONResponse({"status": "skipped", "reason": "unassociated_or_empty"}, 202)
+        meta = await resolve_class_metadata(deps.academic, scheduled_class_id, transcript)
         try:
             req = StructureRequest(
                 transcript_id=transcript_id,
                 scheduled_class_id=scheduled_class_id,
                 institution_id=institution_id,
-                course_name=transcript.get("courseName"),
-                class_date=transcript.get("classDate"),
+                **meta,
                 language=transcript.get("language", "pt-BR"),
                 segments=segments,
             )

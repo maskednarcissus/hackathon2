@@ -14,6 +14,8 @@ class LectureRepository(Protocol):
 
     def get(self, lecture_summary_id: str) -> LectureStructure | None: ...
 
+    def latest_for_sections(self, class_section_ids: set[str]) -> list[LectureStructure]: ...
+
 
 class InMemoryLectureRepository:
     def __init__(self) -> None:
@@ -30,3 +32,7 @@ class InMemoryLectureRepository:
 
     def get(self, lecture_summary_id: str) -> LectureStructure | None:
         return self._by_id.get(lecture_summary_id)
+
+    def latest_for_sections(self, class_section_ids: set[str]) -> list[LectureStructure]:
+        latest = (self._by_id[summary_id] for summary_id in self._latest.values())
+        return [s for s in latest if s.class_section_id in class_section_ids]

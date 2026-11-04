@@ -39,8 +39,11 @@ class StructureRequest(CamelModel):
     transcript_id: str = Field(pattern=UUID_PATTERN)
     scheduled_class_id: str = Field(pattern=UUID_PATTERN)
     institution_id: str | None = Field(default=None, pattern=UUID_PATTERN)
+    class_section_id: str | None = Field(default=None, pattern=UUID_PATTERN)
+    course_id: str | None = Field(default=None, pattern=UUID_PATTERN)
     course_name: str | None = Field(default=None, max_length=255)
     class_date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    starts_at: str | None = Field(default=None, max_length=40)
     language: str = "pt-BR"
     segments: list[Segment] = Field(min_length=1, max_length=20000)
 
@@ -169,6 +172,11 @@ class LectureStructure(CamelModel):
     lecture_summary_id: str
     transcript_id: str
     scheduled_class_id: str
+    class_section_id: str | None = None
+    course_id: str | None = None
+    course_name: str | None = None
+    class_date: str | None = None
+    starts_at: str | None = None
     title: str
     executive_summary: str
     topics: list[Topic]
