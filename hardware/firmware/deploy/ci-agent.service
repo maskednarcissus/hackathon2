@@ -1,0 +1,33 @@
+[Unit]
+Description=Classroom Intelligence capture agent
+Documentation=https://github.com/maskednarcissus/hackathon2/tree/main/hardware/firmware
+Wants=network-online.target time-sync.target
+After=network-online.target time-sync.target sound.target
+
+[Service]
+Type=simple
+User=ci-agent
+Group=audio
+Environment=CI_AGENT_CONFIG=/etc/ci-agent/config.toml
+ExecStart=/opt/ci-agent/venv/bin/ci-agent run
+Restart=always
+RestartSec=5
+# Give the recorder time to finalize the WAV on shutdown.
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/ci-agent
+StateDirectory=ci-agent
+StateDirectoryMode=0700
+DevicePolicy=closed
+DeviceAllow=char-alsa rw
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

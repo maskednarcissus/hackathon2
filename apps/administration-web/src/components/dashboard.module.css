@@ -1,0 +1,144 @@
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--space-3);
+  margin: var(--space-4) 0;
+  padding: 0;
+  list-style: none;
+}
+.tile {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+}
+.tileValue {
+  font-size: 1.75rem;
+  font-weight: 600;
+  display: block;
+}
+.tileLabel {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: flex-end;
+  margin-bottom: var(--space-3);
+}
+.filters label {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.875rem;
+  gap: var(--space-1);
+}
+.filters input,
+.filters select {
+  font: inherit;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-primary);
+  min-width: 180px;
+}
+.tableWrap {
+  overflow-x: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+.table caption {
+  text-align: left;
+  padding: var(--space-3) var(--space-4);
+  color: var(--text-secondary);
+}
+.table th,
+.table td {
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--border);
+  vertical-align: top;
+  white-space: nowrap;
+}
+.table thead th {
+  background: var(--surface-secondary);
+  font-weight: 600;
+}
+.sortButton {
+  font: inherit;
+  font-weight: 600;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  color: inherit;
+}
+.issues {
+  margin: 0;
+  padding-left: var(--space-4);
+  white-space: normal;
+  color: var(--danger);
+}
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 0.8125rem;
+  border: 1px solid currentColor;
+}
+.pillIcon {
+  font-size: 0.75rem;
+}
+.tone_success {
+  color: var(--success);
+}
+.tone_info {
+  color: var(--info);
+}
+.tone_warning {
+  color: var(--warning);
+}
+.tone_danger {
+  color: var(--danger);
+}
+.tone_muted {
+  color: var(--text-secondary);
+}
+.metricGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-3);
+  margin: var(--space-4) 0;
+}
+.metricGrid dt {
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+}
+.metricGrid dd {
+  margin: 0;
+  font-weight: 600;
+}
+.charts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-6);
+  margin: var(--space-4) 0;
+}
+.filters input[type='checkbox'] {
+  min-width: 0;
+}
+.checkboxLabel {
+  flex-direction: row !important;
+  align-items: center;
+}
