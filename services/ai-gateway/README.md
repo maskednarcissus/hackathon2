@@ -12,6 +12,7 @@ Port **8005** · Python · FastAPI · Vertex AI (google-genai) · JSON Schema
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/health` | Liveness |
+| `POST` | `/v1/embed` | Embeddings `{texts, institutionId, purpose: search_index\|query}` → `{vectors, model, dimensions, usage}` (Phase 3 §3); budget + usage accounting like generate |
 | `POST` | `/v1/generate` | Schema-enforced structured generation (one corrective retry on invalid output) |
 | `GET` | `/v1/prompts` · `/v1/prompts/{id}` | Prompt versions, active version, SHA-256 |
 | `GET` | `/v1/calls/{requestId}` | Instrumentation record (prompt hash, input hashes, tokens, cost, latency, attempts, outcome) — never raw transcript |
@@ -24,7 +25,7 @@ Errors: `{ "error": { "code", "message", "details" } }` — `400 validation_erro
 ## Prompts
 
 `prompts/<promptId>/<version>.yaml` (immutable once published) + `prompts/<promptId>/active`.
-Shipped: `lecture-structuring`, `lecture-structuring-merge`, `event-extraction` (all `2026-11-04.1`).
+Shipped: `lecture-structuring`, `lecture-structuring-merge`, `event-extraction`, `assistant-answer` (all `2026-11-04.1`).
 Placeholders: `{{variable}}` for trusted variables, `{{untrusted.<name>}}` for untrusted inputs
 (untrusted inputs without a placeholder are appended to the user turn).
 
@@ -49,6 +50,10 @@ Placeholders: `{{variable}}` for trusted variables, `{{untrusted.<name>}}` for u
 | `AI_GATEWAY_PRICING_JSON` | built-in table | `{"model": {"input": usdPer1M, "output": usdPer1M}}` |
 | `AI_GATEWAY_PROVIDER_TIMEOUT_S` | `60` | Per-attempt timeout (transient errors retried 3× with backoff) |
 | `AUDIT_SERVICE_URL` | — | Emits `ai.generation` audit events (non-fatal) |
+
+Embeddings: `vertex` → `text-multilingual-embedding-002` (RETRIEVAL_DOCUMENT / RETRIEVAL_QUERY task types,
+batches of 250); `fake` → deterministic signed hashed bag-of-words, 256 dims, L2-normalised, over pt-BR
+normalised tokens (accent folding, stopwords, light stemming).
 
 The `fake` provider is deterministic: scripted responses per prompt/task, otherwise the minimal
 instance of the response schema.

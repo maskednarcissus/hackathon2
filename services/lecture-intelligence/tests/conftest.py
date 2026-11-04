@@ -14,7 +14,7 @@ from lecture_intelligence.clients import (
     InMemoryEventPublisher,
     TranscriptNotFoundError,
 )
-from lecture_intelligence.models import Segment
+from lecture_intelligence.models import SearchResult, Segment
 from lecture_intelligence.pipeline import PipelineSettings
 from lecture_intelligence.repository import InMemoryLectureRepository
 
@@ -79,6 +79,21 @@ class FakeTranscripts:
         return self.segments.get(transcript_id, [])
 
 
+class FakeSearch:
+    def __init__(self) -> None:
+        self.results: list[SearchResult] = []
+        self.queries: list[tuple[str, list[str], int, str]] = []
+        self.fail = False
+
+    async def search(
+        self, query: str, class_section_ids: list[str], limit: int, mode: str
+    ) -> list[SearchResult]:
+        self.queries.append((query, class_section_ids, limit, mode))
+        if self.fail:
+            raise RuntimeError("search down")
+        return list(self.results)
+
+
 def make_segments(texts: list[str], seconds_each: int = 10) -> list[dict[str, Any]]:
     return [
         {
@@ -100,6 +115,7 @@ class Harness:
         self.repository = InMemoryLectureRepository()
         self.publisher = InMemoryEventPublisher()
         self.audit = InMemoryAuditClient()
+        self.search = FakeSearch()
         self.client = TestClient(
             create_app(
                 LectureDeps(
@@ -109,6 +125,7 @@ class Harness:
                     publisher=self.publisher,
                     audit=self.audit,
                     settings=PipelineSettings(max_chunk_tokens=max_chunk_tokens),
+                    search=self.search,
                 )
             )
         )

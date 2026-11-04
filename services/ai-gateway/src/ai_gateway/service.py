@@ -19,8 +19,9 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
 from ai_gateway.audit import AuditClient
+from ai_gateway.embeddings import EmbeddingProvider, FakeEmbeddingProvider
 from ai_gateway.errors import GatewayError, ProviderError
-from ai_gateway.models import GenerateRequest
+from ai_gateway.models import EmbedRequest, GenerateRequest
 from ai_gateway.pricing import PricingTable
 from ai_gateway.prompts import PromptNotFoundError, PromptRegistry, PromptVersion, render_template
 from ai_gateway.providers.base import GenerationProvider, Message, ProviderRequest
@@ -51,6 +52,7 @@ class GatewayService:
         pricing: PricingTable,
         audit: AuditClient,
         settings: GatewaySettings | None = None,
+        embedder: EmbeddingProvider | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
@@ -61,6 +63,7 @@ class GatewayService:
         self.pricing = pricing
         self.audit = audit
         self.settings = settings or GatewaySettings()
+        self.embedder: EmbeddingProvider = embedder or FakeEmbeddingProvider()
         self.clock = clock
         self.sleep = sleep
 
@@ -170,6 +173,66 @@ class GatewayService:
             "latencyMs": record.latency_ms,
             "attempts": record.attempts,
             "safety": {"injectionSuspected": bool(signals), "injectionSignals": signals},
+        }
+
+    async def embed(self, req: EmbedRequest) -> dict[str, Any]:
+        record = CallRecord(
+            request_id=str(uuid.uuid4()),
+            created_at=self.clock(),
+            institution_id=req.institution_id,
+            requested_by=req.requested_by,
+            task="embedding",
+            prompt_id="embedding",
+            prompt_version=req.purpose,
+            prompt_sha256="",
+            variables_sha256=_hash_inputs({"purpose": req.purpose}, {}),
+            untrusted_input_chars={"texts": sum(len(t) for t in req.texts)},
+            provider=self.embedder.name,
+            model=self.embedder.model,
+        )
+        self._check_budget(record)
+        started = time.monotonic()
+        response = None
+        try:
+            for retry in range(self.settings.max_transient_retries + 1):
+                try:
+                    response = await asyncio.wait_for(
+                        self.embedder.embed(req.texts, req.purpose),
+                        timeout=self.settings.provider_timeout_s,
+                    )
+                    break
+                except (ProviderError, TimeoutError) as exc:
+                    transient = isinstance(exc, TimeoutError) or exc.transient
+                    record.validation_errors = [str(exc) or "provider timeout"]
+                    if not transient or retry == self.settings.max_transient_retries:
+                        break
+                    await self.sleep(self.settings.backoff_base_s * (2**retry))
+            record.attempts = retry + 1
+            if response is None or len(response.vectors) != len(req.texts):
+                record.outcome = "provider_error"
+            else:
+                record.outcome = "valid"
+                record.validation_errors = []
+                record.model = response.model
+                record.input_tokens = response.input_tokens
+                record.cost_usd = self.pricing.cost(response.model, response.input_tokens, 0)
+        finally:
+            record.latency_ms = int((time.monotonic() - started) * 1000)
+            self.calls.save(record)
+            await self._audit(record)
+        if response is None or record.outcome != "valid":
+            raise GatewayError(
+                "provider_error",
+                "The embedding provider failed to produce vectors",
+                502,
+                {"requestId": record.request_id, "reason": record.validation_errors[:1]},
+            )
+        return {
+            "requestId": record.request_id,
+            "vectors": response.vectors,
+            "model": response.model,
+            "dimensions": response.dimensions,
+            "usage": {"inputTokens": record.input_tokens, "costUsd": record.cost_usd},
         }
 
     def month_to_date_spend(self, institution_id: str) -> float:

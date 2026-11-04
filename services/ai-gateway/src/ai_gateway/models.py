@@ -7,7 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 
-Task = Literal["lecture_structuring", "event_extraction", "date_resolution"]
+Task = Literal["lecture_structuring", "event_extraction", "date_resolution", "assistant_answer"]
 JsonScalar = str | int | float | bool | None
 
 
@@ -50,6 +50,23 @@ class GenerateRequest(CamelModel):
         return value
 
 
+class EmbedRequest(CamelModel):
+    texts: list[str] = Field(min_length=1, max_length=1000)
+    institution_id: str = Field(
+        pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    )
+    purpose: Literal["search_index", "query"]
+    requested_by: str = Field(default="unknown", min_length=1, max_length=100)
+
+    @field_validator("texts")
+    @classmethod
+    def _text_sizes(cls, value: list[str]) -> list[str]:
+        for i, text in enumerate(value):
+            if len(text) > 20000:
+                raise ValueError(f"texts[{i}] exceeds 20000 characters")
+        return value
+
+
 class BudgetUpdate(CamelModel):
     monthly_usd: float | None = Field(ge=0)
 
@@ -68,6 +85,7 @@ class ProviderInfo(BaseModel):
 JsonDict = dict[str, Any]
 __all__ = [
     "BudgetUpdate",
+    "EmbedRequest",
     "CamelModel",
     "GenerateOptions",
     "GenerateRequest",

@@ -15,19 +15,27 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
+from lecture_intelligence.assistant import (
+    Assistant,
+    AssistantRepository,
+    AssistantSettings,
+    InMemoryAssistantRepository,
+)
 from lecture_intelligence.clients import (
     AuditClient,
     EventPublisher,
     GatewayClient,
     HttpAuditClient,
     HttpGatewayClient,
+    HttpSearchClient,
     HttpTranscriptClient,
     InMemoryAuditClient,
     InMemoryEventPublisher,
+    SearchClient,
     TranscriptClient,
     TranscriptNotFoundError,
 )
-from lecture_intelligence.models import StructureRequest
+from lecture_intelligence.models import AskRequest, FeedbackRequest, StructureRequest
 from lecture_intelligence.pipeline import LectureStructurer, PipelineError, PipelineSettings
 from lecture_intelligence.repository import InMemoryLectureRepository, LectureRepository
 
@@ -42,6 +50,9 @@ class LectureDeps:
     publisher: EventPublisher = field(default_factory=InMemoryEventPublisher)
     audit: AuditClient = field(default_factory=InMemoryAuditClient)
     settings: PipelineSettings = field(default_factory=PipelineSettings)
+    search: SearchClient | None = None
+    assistant_repository: AssistantRepository = field(default_factory=InMemoryAssistantRepository)
+    assistant_settings: AssistantSettings = field(default_factory=AssistantSettings)
 
 
 def deps_from_env() -> LectureDeps:
@@ -51,11 +62,11 @@ def deps_from_env() -> LectureDeps:
         from lecture_intelligence.clients import PubSubEventPublisher
 
         publisher = PubSubEventPublisher(project)
+    transcript_url = os.environ.get("TRANSCRIPT_MANAGEMENT_URL", "http://localhost:4008")
     return LectureDeps(
         gateway=HttpGatewayClient(os.environ.get("AI_GATEWAY_URL", "http://localhost:8005")),
-        transcripts=HttpTranscriptClient(
-            os.environ.get("TRANSCRIPT_MANAGEMENT_URL", "http://localhost:4008")
-        ),
+        transcripts=HttpTranscriptClient(transcript_url),
+        search=HttpSearchClient(transcript_url),
         publisher=publisher,
         audit=HttpAuditClient(audit_url) if audit_url else InMemoryAuditClient(),
         settings=PipelineSettings(
@@ -94,6 +105,17 @@ def create_app(deps: LectureDeps | None = None) -> FastAPI:
         audit=deps.audit,
         settings=deps.settings,
     )
+    assistant = (
+        Assistant(
+            gateway=deps.gateway,
+            search=deps.search,
+            lectures=deps.repository,
+            repository=deps.assistant_repository,
+            settings=deps.assistant_settings,
+        )
+        if deps.search is not None
+        else None
+    )
     processed_events: set[str] = set()
     app = FastAPI(
         title="CI Lecture Intelligence Service",
@@ -129,6 +151,18 @@ def create_app(deps: LectureDeps | None = None) -> FastAPI:
         if found is None:
             return _error("not_found", "No lecture structure for this scheduled class", 404)
         return JSONResponse(found.to_json())
+
+    @app.post("/v1/assistant/ask")
+    async def ask(body: AskRequest) -> dict[str, Any]:
+        if assistant is None:
+            raise PipelineError("assistant_unavailable", "Search is not configured", 503)
+        return (await assistant.ask(body)).to_json()
+
+    @app.post("/v1/assistant/feedback", status_code=201)
+    async def feedback(body: FeedbackRequest) -> dict[str, Any]:
+        if assistant is None:
+            raise PipelineError("assistant_unavailable", "Search is not configured", 503)
+        return assistant.feedback(body)
 
     async def handle_transcript_event(request: Request) -> JSONResponse:
         try:

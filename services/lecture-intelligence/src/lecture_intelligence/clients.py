@@ -10,7 +10,7 @@ from typing import Any, Protocol
 import httpx
 import structlog
 
-from lecture_intelligence.models import Segment
+from lecture_intelligence.models import SearchResult, Segment
 
 log = structlog.get_logger(__name__)
 
@@ -176,3 +176,32 @@ def _error_body(response: httpx.Response) -> dict[str, Any]:
         return {}
     error = body.get("error") if isinstance(body, dict) else None
     return error if isinstance(error, dict) else {}
+
+
+class SearchClient(Protocol):
+    async def search(
+        self, query: str, class_section_ids: list[str], limit: int, mode: str
+    ) -> list[SearchResult]: ...
+
+
+class HttpSearchClient:
+    """transcript-management ``GET /v1/search`` (Phase 3 contract §3)."""
+
+    def __init__(self, base_url: str, timeout_s: float = 10.0) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._timeout = timeout_s
+
+    async def search(
+        self, query: str, class_section_ids: list[str], limit: int, mode: str
+    ) -> list[SearchResult]:
+        params: dict[str, str | int] = {
+            "q": query,
+            "classSectionIds": ",".join(class_section_ids),
+            "limit": limit,
+            "mode": mode,
+        }
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            response = await client.get(f"{self._base_url}/v1/search", params=params)
+        response.raise_for_status()
+        body = response.json()
+        return [SearchResult.model_validate(r) for r in body.get("results", [])]

@@ -21,7 +21,10 @@ DEFAULT_PRICING: dict[str, ModelPrice] = {
     "gemini-2.5-pro": ModelPrice(1.25, 10.0),
     "gemini-2.5-flash": ModelPrice(0.30, 2.50),
     "gemini-2.5-flash-lite": ModelPrice(0.10, 0.40),
+    # Vertex bills embeddings per character; expressed here per token (~4 chars/token).
+    "text-multilingual-embedding-002": ModelPrice(0.10, 0.0),
     "fake-model": ModelPrice(0.0, 0.0),
+    "fake-embedding": ModelPrice(0.0, 0.0),
 }
 
 

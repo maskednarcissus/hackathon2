@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -14,8 +14,9 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from ai_gateway.audit import AuditClient, HttpAuditClient, InMemoryAuditClient
+from ai_gateway.embeddings import EmbeddingProvider, FakeEmbeddingProvider
 from ai_gateway.errors import GatewayError
-from ai_gateway.models import BudgetUpdate, GenerateRequest
+from ai_gateway.models import BudgetUpdate, EmbedRequest, GenerateRequest
 from ai_gateway.pricing import PricingTable
 from ai_gateway.prompts import PromptNotFoundError, PromptRegistry
 from ai_gateway.providers.base import GenerationProvider
@@ -43,15 +44,19 @@ class GatewayDeps:
     pricing: PricingTable
     audit: AuditClient
     settings: GatewaySettings
+    embedder: EmbeddingProvider = field(default_factory=FakeEmbeddingProvider)
 
 
 def deps_from_env() -> GatewayDeps:
     provider_name = os.environ.get("AI_GATEWAY_PROVIDER", "fake")
     provider: GenerationProvider
+    embedder: EmbeddingProvider = FakeEmbeddingProvider()
     if provider_name == "vertex":
+        from ai_gateway.embeddings import VertexEmbeddingProvider
         from ai_gateway.providers.vertex import VertexGeminiProvider
 
         provider = VertexGeminiProvider()
+        embedder = VertexEmbeddingProvider()
     elif provider_name == "fake":
         provider = FakeProvider()
     else:
@@ -70,6 +75,7 @@ def deps_from_env() -> GatewayDeps:
         settings=GatewaySettings(
             provider_timeout_s=float(os.environ.get("AI_GATEWAY_PROVIDER_TIMEOUT_S", "60")),
         ),
+        embedder=embedder,
     )
 
 
@@ -101,6 +107,7 @@ def create_app(deps: GatewayDeps | None = None, service: GatewayService | None =
         pricing=deps.pricing,
         audit=deps.audit,
         settings=deps.settings,
+        embedder=deps.embedder,
     )
     app = FastAPI(
         title="CI AI Gateway Service",
@@ -131,6 +138,10 @@ def create_app(deps: GatewayDeps | None = None, service: GatewayService | None =
     @app.post("/v1/generate")
     async def generate(body: GenerateRequest) -> dict[str, Any]:
         return await svc.generate(body)
+
+    @app.post("/v1/embed")
+    async def embed(body: EmbedRequest) -> dict[str, Any]:
+        return await svc.embed(body)
 
     @app.get("/v1/prompts")
     async def list_prompts() -> dict[str, Any]:
