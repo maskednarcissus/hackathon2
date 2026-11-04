@@ -1,8 +1,9 @@
-import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
-import { ZodError, type ZodTypeAny, type z } from 'zod';
+import Fastify, { type FastifyInstance } from 'fastify';
+import { ZodError } from 'zod';
 import { InMemoryAuditClient, type AuditClient } from './audit.js';
 import { InMemoryChannel, RecipientDirectory, type NotificationChannel } from './channels.js';
 import { AlertEngine } from './engine.js';
+import { HttpError, parse, sendError } from './http.js';
 import {
   AlertActionSchema,
   AlertQuerySchema,
@@ -10,54 +11,69 @@ import {
   EventEnvelopeSchema,
 } from './schemas.js';
 import { InMemoryAlertStore, type AlertStore } from './store.js';
+import {
+  LocalEnrollmentDirectory,
+  MapCalendarEventSource,
+  MapClassDirectory,
+  type CalendarEventSource,
+  type ClassDirectory,
+  type EnrollmentDirectory,
+} from './student/directories.js';
+import { InMemoryEmailSender, type EmailSender } from './student/email.js';
+import { StudentNotifier } from './student/notifier.js';
+import { registerStudentRoutes } from './student/routes.js';
+import { InMemoryStudentStore, type StudentStore } from './student/store.js';
+import { FakePushSender, type PushSender } from './student/webpush.js';
+import type { AccessTokenVerifier } from './vendor/jwt-verify.js';
 
 export interface AppDeps {
+  // Phase 1 — recording failure alerts (1.17)
   store?: AlertStore;
   channels?: NotificationChannel[];
   recipients?: RecipientDirectory;
   audit?: AuditClient;
   clock?: () => Date;
   logger?: boolean;
+  // Phase 3 — student notifications (3.11, 3.12)
+  studentStore?: StudentStore;
+  enrollments?: EnrollmentDirectory;
+  calendar?: CalendarEventSource;
+  classes?: ClassDirectory;
+  email?: EmailSender;
+  push?: PushSender;
+  vapidPublicKey?: string | null;
+  verifyToken?: AccessTokenVerifier;
+  internalToken?: string;
+  studentWebUrl?: string;
 }
 
-class HttpError extends Error {
-  constructor(
-    readonly statusCode: number,
-    readonly code: string,
-    message: string,
-    readonly details?: unknown,
-  ) {
-    super(message);
-  }
-}
-
-function parse<S extends ZodTypeAny>(schema: S, value: unknown): z.infer<S> {
-  const result = schema.safeParse(value);
-  if (!result.success) {
-    throw new HttpError(400, 'validation_error', 'Invalid request', result.error.flatten());
-  }
-  return result.data as z.infer<S>;
-}
-
-const sendError = (reply: FastifyReply, err: HttpError): FastifyReply =>
-  reply.status(err.statusCode).send({
-    error: {
-      code: err.code,
-      message: err.message,
-      ...(err.details ? { details: err.details } : {}),
-    },
-  });
-
-export function buildApp(deps: AppDeps = {}): { app: FastifyInstance; engine: AlertEngine } {
+export function buildApp(deps: AppDeps = {}): {
+  app: FastifyInstance;
+  engine: AlertEngine;
+  notifier: StudentNotifier;
+} {
   const app = Fastify({ logger: deps.logger ?? false });
+  const clock = deps.clock ?? ((): Date => new Date());
   const store = deps.store ?? new InMemoryAlertStore();
   const engine = new AlertEngine({
     store,
     channels: deps.channels ?? [new InMemoryChannel()],
     recipients: deps.recipients ?? new RecipientDirectory(),
     audit: deps.audit ?? new InMemoryAuditClient(),
-    clock: deps.clock ?? (() => new Date()),
+    clock,
     logger: app.log,
+  });
+  const studentStore = deps.studentStore ?? new InMemoryStudentStore();
+  const notifier = new StudentNotifier({
+    store: studentStore,
+    enrollments: deps.enrollments ?? new LocalEnrollmentDirectory(studentStore),
+    calendar: deps.calendar ?? new MapCalendarEventSource(),
+    classes: deps.classes ?? new MapClassDirectory(),
+    email: deps.email ?? new InMemoryEmailSender(),
+    push: deps.push ?? new FakePushSender(),
+    clock,
+    logger: app.log,
+    ...(deps.studentWebUrl ? { studentWebUrl: deps.studentWebUrl } : {}),
   });
 
   app.setErrorHandler((err, _req, reply) => {
@@ -81,25 +97,37 @@ export function buildApp(deps: AppDeps = {}): { app: FastifyInstance; engine: Al
 
   app.get('/health', () => ({ status: 'ok', service: 'notifications' }));
 
+  /**
+   * Pub/Sub push target for every lifecycle event. Both consumers are idempotent
+   * (alert dedupe key; student dedupe key), so a 503 here is safe to retry.
+   */
   app.post('/v1/lifecycle-events', async (req, reply) => {
     const event = parse(EventEnvelopeSchema, req.body);
     const result = await engine.handleEvent(event);
+    let students: Awaited<ReturnType<StudentNotifier['handleEvent']>>;
+    try {
+      students = await notifier.handleEvent(event);
+    } catch (err) {
+      app.log.error({ err, eventId: event.eventId, type: event.type }, 'student fan-out failed');
+      throw new HttpError(
+        503,
+        'dependency_unavailable',
+        'Student notification fan-out failed; retry',
+      );
+    }
     return reply.status(202).send({
       eventId: event.eventId,
       raised: result.raised.map((a) => a.id),
       updated: result.updated.map((a) => a.id),
       resolved: result.resolved.map((a) => a.id),
+      studentNotifications: students,
     });
   });
 
   app.post('/v1/alerts/evaluate', async (req) => {
     const input = parse(EvaluateRequestSchema, req.body ?? {});
     const result = await engine.evaluate(input);
-    return {
-      raised: result.raised,
-      updated: result.updated,
-      resolved: result.resolved,
-    };
+    return { raised: result.raised, updated: result.updated, resolved: result.resolved };
   });
 
   app.get('/v1/alerts', async (req) => {
@@ -128,5 +156,14 @@ export function buildApp(deps: AppDeps = {}): { app: FastifyInstance; engine: Al
     return { alert };
   });
 
-  return { app, engine };
+  registerStudentRoutes(app, {
+    store: studentStore,
+    notifier,
+    clock,
+    vapidPublicKey: deps.vapidPublicKey ?? null,
+    verifyToken: deps.verifyToken,
+    internalToken: deps.internalToken,
+  });
+
+  return { app, engine, notifier };
 }

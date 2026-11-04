@@ -2,7 +2,8 @@
 
 Port **4006**. Phase 1 scope: **recording failure alerting** (deliverable 1.17) per
 [`docs/architecture/phase-1-capture-pipeline.md` §10](../../docs/architecture/phase-1-capture-pipeline.md).
-Student notifications (push / email / in-app, preferences) arrive in Phase 3.
+Phase 3 scope: **student notifications** (3.11) and **notification preferences** (3.12) per
+[`docs/architecture/phase-3-student-experience.md` §6](../../docs/architecture/phase-3-student-experience.md).
 
 ## Alert rules
 
@@ -34,6 +35,67 @@ Student notifications (push / email / in-app, preferences) arrive in Phase 3.
 
 Errors: `{ "error": { "code", "message", "details?" } }`.
 
+## Student notifications (Phase 3 — 3.11, 3.12)
+
+### Triggers (via `POST /v1/lifecycle-events`)
+
+| Event                                                            | Category             | Notification                      |
+| ---------------------------------------------------------------- | -------------------- | --------------------------------- |
+| `event.published` / `calendar.event_published` (assessment)      | `new_assessment`     | "Nova avaliação/prazo: Prova"     |
+| same, type `class_cancellation`                                  | `class_cancellation` | "Aula cancelada"                  |
+| `event.updated` / `calendar.event_updated` with date/time change | `deadline_change`    | "Prazo alterado: …" (from → to)   |
+| update to status `cancelled`, `event.cancelled`                  | `class_cancellation` | "Aula cancelada" / "Cancelado: …" |
+| `lecture.structured`                                             | `lecture_summary`    | "Resumo da aula disponível"       |
+| `POST /v1/reminders/run`                                         | `reminder`           | "Lembrete: Prova amanhã / em 2 h" |
+
+- Event details come inline (`classSectionId, title, eventDate…`) or from calendar
+  `GET /v1/calendar-events/{calendarEventId}`; `event.updated` that only carries the extracted
+  `eventId` is resolved through the locally tracked event. Title-only edits are silent.
+- `lecture.structured` resolves the section via academic-integration `GET /v1/scheduled-classes/{id}`.
+- Fan-out goes to students with an **active** enrollment in the section (`EnrollmentDirectory`;
+  default = local mirror fed by `POST /v1/sync/enrollments`).
+- Dedup key `(userId, category, resourceId, version)`; redelivered events never notify twice.
+  If the calendar is unreachable the endpoint answers `503` so Pub/Sub retries (safe: idempotent).
+- Reminders: for each active assessment (not announcements), each student gets the reminder of the
+  **smallest** of their offsets whose time has come (default `[24, 2]` h) — a late publication never
+  produces a burst of stale reminders. A date change re-arms reminders. Events without a time are
+  treated as due at 08:00 local. Run every 5–15 min (Cloud Scheduler); it also flushes deferred deliveries.
+
+### Channels
+
+- `in_app` — stored; always delivered immediately.
+- `email` — HTTP mail relay (`MAIL_RELAY_URL`); address from the enrollment sync (`email`).
+- `push` — Web Push: VAPID JWT (ES256, RFC 8292) + `aes128gcm` payload encryption (RFC 8291),
+  implemented with `node:crypto` (verified against the RFC 8291 Appendix A vector). 404/410
+  responses delete the subscription. `FakePushSender` when VAPID keys are not configured.
+- Quiet hours defer `email`/`push` until the window ends (`in_app` is never deferred); deferred
+  items are re-checked against the current preferences when flushed.
+
+### Preferences
+
+`in_app` cannot be disabled for `deadline_change` and `class_cancellation` (`422 critical_in_app_locked`).
+Defaults: everything on, except `lecture_summary` email/push and `reminder` email.
+
+### API
+
+| Method         | Path                                                                                           | Auth      |
+| -------------- | ---------------------------------------------------------------------------------------------- | --------- |
+| `GET`          | `/v1/users/{userId}/notifications?unread=&limit=&before=` → `{items, unreadCount, nextBefore}` | user      |
+| `POST`         | `/v1/users/{userId}/notifications/{id}/read`                                                   | user      |
+| `POST`         | `/v1/users/{userId}/notifications/read-all`                                                    | user      |
+| `GET` / `PUT`  | `/v1/users/{userId}/notification-preferences` (PUT merges partial updates)                     | user      |
+| `POST` / `GET` | `/v1/users/{userId}/push-subscriptions` (body = `PushSubscription.toJSON()`)                   | user      |
+| `DELETE`       | `/v1/users/{userId}/push-subscriptions/{id}`                                                   | user      |
+| `GET`          | `/v1/push/vapid-public-key`                                                                    | public    |
+| `POST`         | `/v1/sync/enrollments` (identity's body + optional `userId`, `email` per row; `mode: upsert    | replace`) | internal |
+| `POST`         | `/v1/reminders/run` `{now?}`                                                                   | internal  |
+| `POST`         | `/v1/notifications/flush-deferred` `{now?}`                                                    | internal  |
+| `GET`          | `/v1/notifications/{id}/deliveries`                                                            | internal  |
+
+_user_: with `IDENTITY_URL` set, `Authorization: Bearer <identity JWT>` is verified via JWKS
+(vendored `src/vendor/jwt-verify.ts`) and `sub` must equal `{userId}`. _internal_: with
+`INTERNAL_API_TOKEN` set, `x-internal-token` is required.
+
 ## Configuration
 
 | Env                                  | Meaning                                                                                                                                                            |
@@ -45,6 +107,9 @@ Errors: `{ "error": { "code", "message", "details?" } }`.
 
 Storage is behind the `AlertStore` port (`src/store.ts`); the in-memory adapter is used
 until the Postgres adapter lands (tables `alerts`, `alert_deliveries`, `alert_class_marks`).
+Student notifications use the `StudentStore` port (`src/student/store.ts`): `user_notifications`,
+`notification_preferences`, `push_subscriptions`, `deferred_deliveries`, `notification_deliveries`,
+`notification_enrollments`, `notification_tracked_events`.
 
 ## Technology
 
