@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { buildApp } from './app.js';
 import {
   HttpAuditClient,
@@ -9,6 +10,12 @@ import { createPool } from './platform/pg.js';
 import { InMemoryAcademicRepository } from './repository.js';
 import { PgAcademicRepository } from './repository.pg.js';
 import { parseSyncTargets, SyncService } from './sync.js';
+import { defaultHttpDeps } from './connectors/http.js';
+import { DefaultConnectorFactory } from './connectors/registry.js';
+import { EnvSecretResolver } from './connectors/secrets.js';
+import { ConnectorService } from './connectors/service.js';
+import { InMemoryConnectorStore } from './connectors/store.js';
+import { PgConnectorStore } from './connectors/store.pg.js';
 
 const env = process.env;
 const port = Number(env['PORT'] ?? 4003);
@@ -29,8 +36,22 @@ const sync = new SyncService(
   },
 );
 
+const connectorStore = pool ? new PgConnectorStore(pool) : new InMemoryConnectorStore();
+// Connector credentials: `env:NAME` secret references (Secret Manager values mounted as env vars).
+const connectorFactory = new DefaultConnectorFactory(new EnvSecretResolver(env), defaultHttpDeps());
+
 const app = buildApp({
   repository,
+  connectors: (runImport) =>
+    new ConnectorService({
+      store: connectorStore,
+      repository,
+      runImport,
+      factory: connectorFactory,
+      audit: new HttpAuditClient(auditUrl, (err) => app.log.warn({ err }, 'audit emission failed')),
+      clock: { now: () => new Date() },
+      newId: randomUUID,
+    }),
   organization: new HttpOrganizationClient(organizationUrl),
   audit: new HttpAuditClient(auditUrl, (err) => app.log.warn({ err }, 'audit emission failed')),
   devices: new HttpDeviceDirectory(

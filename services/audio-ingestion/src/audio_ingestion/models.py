@@ -9,8 +9,8 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
-# audio-processing decodes WAV PCM s16le only (contract §5.1); add codecs there first.
-ALLOWED_AUDIO_FORMATS = frozenset({"wav_pcm_s16le"})
+# audio-processing decodes both (FLAC via libsndfile; Phase 6.10 gen2 devices encode FLAC).
+ALLOWED_AUDIO_FORMATS = frozenset({"wav_pcm_s16le", "flac"})
 ALLOWED_SAMPLE_RATES = frozenset({16_000, 22_050, 24_000, 32_000, 44_100, 48_000})
 MAX_CHANNELS = 8
 

@@ -1,0 +1,287 @@
+{
+ "routes": [
+  {
+   "path": "/api/framework/v1/companies/1",
+   "responses": [
+    {
+     "body": {
+      "code": 1,
+      "name": "Faculdade Exemplo S.A."
+     }
+    }
+   ]
+  },
+  {
+   "path": "/api/educacional/v1/periodosLetivos/2026-2",
+   "responses": [
+    {
+     "body": {
+      "codPerLet": "2026-2",
+      "descricao": "2026/2",
+      "dtInicio": "2026-08-03T00:00:00",
+      "dtFim": "2026-12-11T00:00:00"
+     }
+    }
+   ]
+  },
+  {
+   "path": "/api/educacional/v1/disciplinas",
+   "query": {
+    "page": "1"
+   },
+   "responses": [
+    {
+     "body": {
+      "items": [
+       {
+        "codDisc": "DIR101",
+        "nome": "Direito Constitucional I",
+        "area": "law",
+        "creditos": 4
+       },
+       {
+        "codDisc": "MED201",
+        "nome": "Anatomia Humana",
+        "area": "medicine"
+       }
+      ],
+      "hasNext": true
+     }
+    }
+   ]
+  },
+  {
+   "path": "/api/educacional/v1/disciplinas",
+   "query": {
+    "page": "2"
+   },
+   "responses": [
+    {
+     "body": {
+      "items": [
+       {
+        "codDisc": "ECO110",
+        "nome": "Microeconomia",
+        "area": "economics",
+        "creditos": "2"
+       }
+      ],
+      "hasNext": false
+     }
+    }
+   ]
+  },
+  {
+   "path": "/api/educacional/v1/professores",
+   "query": {
+    "page": "1"
+   },
+   "responses": [
+    {
+     "status": 429,
+     "headers": {
+      "retry-after": "2"
+     },
+     "body": {
+      "message": "Too Many Requests"
+     }
+    },
+    {
+     "body": {
+      "items": [
+       {
+        "codProf": "P1",
+        "nome": "Ana Souza",
+        "email": "Ana.Souza@uni.example"
+       },
+       {
+        "codProf": "P2",
+        "nome": "Carlos Lima",
+        "email": "carlos@uni.example"
+       }
+      ],
+      "hasNext": false
+     }
+    }
+   ]
+  },
+  {
+   "path": "/api/educacional/v1/turmasDisciplinas",
+   "query": {
+    "page": "1"
+   },
+   "responses": [
+    {
+     "body": {
+      "items": [
+       {
+        "idTurmaDisc": "1001",
+        "codTurma": "A",
+        "codDisc": "DIR101",
+        "codProf": "P1"
+       },
+       {
+        "idTurmaDisc": "1002",
+        "codTurma": "B",
+        "codDisc": "MED201",
+        "codProf": "P2"
+       }
+      ],
+      "hasNext": true
+     }
+    }
+   ]
+  },
+  {
+   "path": "/api/educacional/v1/turmasDisciplinas",
+   "query": {
+    "page": "2"
+   },
+   "responses": [
+    {
+     "body": {
+      "items": [
+       {
+        "idTurmaDisc": "1003",
+        "codTurma": "C",
+        "codDisc": "ECO110",
+        "codProf": "P9"
+       }
+      ],
+      "hasNext": false
+     }
+    }
+   ]
+  },
+  {
+   "path": "/api/educacional/v1/horarios",
+   "query": {
+    "page": "1"
+   },
+   "responses": [
+    {
+     "body": {
+      "items": [
+       {
+        "idTurmaDisc": "1001",
+        "diaSemana": 2,
+        "horaInicial": "19:00",
+        "horaFinal": "20:40",
+        "codSala": "S101"
+       },
+       {
+        "idTurmaDisc": "1001",
+        "diaSemana": 4,
+        "horaInicial": "19:00:00",
+        "horaFinal": "20:40:00",
+        "codSala": "S102"
+       }
+      ],
+      "hasNext": true
+     }
+    }
+   ]
+  },
+  {
+   "path": "/api/educacional/v1/horarios",
+   "query": {
+    "page": "2"
+   },
+   "responses": [
+    {
+     "body": {
+      "items": [
+       {
+        "idTurmaDisc": "1002",
+        "diaSemana": 3,
+        "horaInicial": "08:00",
+        "horaFinal": "09:40",
+        "codSala": "LAB9"
+       },
+       {
+        "idTurmaDisc": "1003",
+        "diaSemana": 5,
+        "horaInicial": "10:00",
+        "horaFinal": "11:40",
+        "codSala": "S101"
+       },
+       {
+        "idTurmaDisc": "1001",
+        "diaSemana": 9,
+        "horaInicial": "10:00",
+        "horaFinal": "11:00",
+        "codSala": "S101"
+       }
+      ],
+      "hasNext": false
+     }
+    }
+   ]
+  },
+  {
+   "path": "/api/educacional/v1/matriculas",
+   "query": {
+    "page": "1"
+   },
+   "responses": [
+    {
+     "body": {
+      "items": [
+       {
+        "ra": "2026001",
+        "nome": "Bruno Lima",
+        "email": "bruno@uni.example",
+        "idTurmaDisc": "1001",
+        "situacao": "Matriculado"
+       },
+       {
+        "ra": "2026002",
+        "nome": "Carla Dias",
+        "email": "Carla@uni.example",
+        "idTurmaDisc": "1001",
+        "situacao": "Trancado"
+       }
+      ],
+      "hasNext": true
+     }
+    }
+   ]
+  },
+  {
+   "path": "/api/educacional/v1/matriculas",
+   "query": {
+    "page": "2"
+   },
+   "responses": [
+    {
+     "body": {
+      "items": [
+       {
+        "ra": "2026003",
+        "nome": "Sem E-mail",
+        "email": "",
+        "idTurmaDisc": "1001",
+        "situacao": "Matriculado"
+       },
+       {
+        "ra": "2026001",
+        "nome": "Bruno Lima",
+        "email": "bruno@uni.example",
+        "idTurmaDisc": "1002",
+        "situacao": "Matriculado"
+       },
+       {
+        "ra": "2026004",
+        "nome": "Davi Melo",
+        "email": "davi@uni.example",
+        "idTurmaDisc": "1001",
+        "situacao": "Jubilado"
+       }
+      ],
+      "hasNext": false
+     }
+    }
+   ]
+  }
+ ]
+}

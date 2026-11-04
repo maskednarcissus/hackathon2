@@ -64,8 +64,11 @@ def upload_recording(store: ObjectStore, path: Path, recording_id: str) -> str:
 
 def uploaded_event(path: Path, uri: str, recording_id: str, **data: Any) -> dict[str, Any]:
     body = path.read_bytes()
-    with wave.open(str(path)) as wav:
-        rate, channels, frames = wav.getframerate(), wav.getnchannels(), wav.getnframes()
+    if body.startswith(b"RIFF"):
+        with wave.open(str(path)) as wav:
+            rate, channels, frames = wav.getframerate(), wav.getnchannels(), wav.getnframes()
+    else:  # FLAC (or junk): metadata comes from the caller's overrides
+        rate, channels, frames = SR, 1, 0
     payload = {
         "recordingSessionId": recording_id,
         "deviceId": str(uuid.uuid4()),
@@ -206,7 +209,7 @@ def test_checksum_mismatch_rejected(harness: Harness, tmp_path: Path) -> None:
     [
         lambda e: e.update(type="upload.failed"),
         lambda e: e["data"].pop("storageUri"),
-        lambda e: e["data"].update(audioFormat="flac"),
+        lambda e: e["data"].update(audioFormat="opus"),
     ],
 )
 def test_invalid_events_rejected(harness: Harness, tmp_path: Path, mutate: Any) -> None:

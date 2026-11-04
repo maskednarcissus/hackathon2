@@ -186,3 +186,16 @@ def test_http_event_bus_publisher() -> None:
     )
     with pytest.raises(EventPublishError):
         failing.publish(event)
+
+
+def test_flac_recording_is_stored_as_flac(harness: Harness) -> None:
+    audio = b"fLaC" + random_audio(CHUNK)
+    recording_id = register(harness, audio, audioFormat="flac", localRecordingId="rec-flac")
+    upload_id = start_upload(harness.signed, recording_id, audio, CHUNK)["uploadId"]
+    for index, data in enumerate(chunks(audio, CHUNK)):
+        assert put_chunk(harness.signed, upload_id, index, data) == 204
+    body = harness.signed.post(f"/v1/uploads/{upload_id}/complete").json()
+    assert body["storageUri"].endswith(f"/{recording_id}.flac")
+    event = harness.publisher.of_type("recording.uploaded")[-1]
+    assert event.data["audioFormat"] == "flac"
+    assert segment_uri_prefix(body["storageUri"]).endswith(f"/{recording_id}/segments/")

@@ -1,30 +1,28 @@
+# Node/TypeScript service image. Build from the repository root:
+#   docker build -f infrastructure/docker/Dockerfile.node --build-arg SERVICE_PATH=services/audit .
 FROM node:20-alpine AS base
-RUN corepack enable pnpm
-WORKDIR /app
-
-FROM base AS deps
-COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
-COPY apps/ apps/
-COPY services/ services/
-COPY packages/ packages/
-RUN pnpm install --frozen-lockfile --prod
+RUN corepack enable && corepack prepare pnpm@9.0.0 --activate
+WORKDIR /repo
 
 FROM base AS builder
-COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
-COPY apps/ apps/
-COPY services/ services/
-COPY packages/ packages/
-RUN pnpm install --frozen-lockfile
 ARG SERVICE_PATH
-COPY ${SERVICE_PATH} ${SERVICE_PATH}
-RUN pnpm --filter ${SERVICE_PATH} build
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml tsconfig.base.json ./
+COPY packages/ packages/
+COPY services/ services/
+COPY apps/ apps/
+COPY infrastructure/dev-event-bus/ infrastructure/dev-event-bus/
+RUN pnpm install --frozen-lockfile
+RUN pnpm --filter "./${SERVICE_PATH}..." build
+# Self-contained production bundle of the service (own node_modules, no workspace links).
+RUN pnpm --filter "./${SERVICE_PATH}" deploy --prod /out
 
 FROM node:20-alpine AS runner
-WORKDIR /app
 ENV NODE_ENV=production
-ARG SERVICE_PATH
-COPY --from=deps /app/node_modules ./node_modules
-COPY --from=builder /app/${SERVICE_PATH}/dist ./${SERVICE_PATH}/dist
-COPY --from=builder /app/${SERVICE_PATH}/package.json ./${SERVICE_PATH}/package.json
-EXPOSE 4000
+WORKDIR /app
+RUN addgroup -S app && adduser -S app -G app
+COPY --from=builder /out ./
+# The dev event bus reads the shared routing table.
+COPY infrastructure/events/ /events/
+USER app
+EXPOSE 8080
 CMD ["node", "dist/index.js"]

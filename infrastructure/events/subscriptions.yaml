@@ -1,0 +1,120 @@
+# Classroom Intelligence — event routing table (topic = event `type`).
+#
+# Single source of truth for:
+#   * the local dev event bus (infrastructure/dev-event-bus), and
+#   * Terraform (infrastructure/terraform/modules/pubsub) → Pub/Sub topics + push subscriptions.
+#
+# Each subscription names a `service` (resolved to a base URL per environment:
+# `<SERVICE_NAME_UPPER_SNAKE>_URL` for the dev bus, `var.service_urls[service]` in Terraform)
+# and the push `path` on that service. Push bodies use the Pub/Sub push format
+# `{ message: { data: base64(envelope), messageId, attributes }, subscription }`.
+#
+# Keep this file in the strict subset below (2-space indents, `key: value`, `- name:` list items,
+# `[]` for empty lists, no anchors/multi-line strings) — the dev bus parses it without a YAML library.
+#
+# Topics with no subscribers are still created so producers can publish; audit trails come from
+# direct audit calls, not from these topics.
+
+topics:
+  # --- Phase 1: capture & transcription -------------------------------------------------
+  device.registered: []
+  device.assigned: []
+  device.heartbeat_missed:
+    - name: notifications-alerts
+      service: notifications
+      path: /v1/lifecycle-events
+  recording.started:
+    - name: notifications-alerts
+      service: notifications
+      path: /v1/lifecycle-events
+  recording.stopped:
+    - name: notifications-alerts
+      service: notifications
+      path: /v1/lifecycle-events
+  recording.missed:
+    - name: notifications-alerts
+      service: notifications
+      path: /v1/lifecycle-events
+  recording.uploaded:
+    - name: audio-processing
+      service: audio-processing
+      path: /v1/events/recording-uploaded
+    - name: notifications-alerts
+      service: notifications
+      path: /v1/lifecycle-events
+  upload.failed:
+    - name: notifications-alerts
+      service: notifications
+      path: /v1/lifecycle-events
+  audio.quality_assessed:
+    - name: notifications-alerts
+      service: notifications
+      path: /v1/lifecycle-events
+  recording.segmented:
+    - name: transcription
+      service: transcription
+      path: /v1/events/recording-segmented
+  transcription.completed:
+    - name: speaker-diarization
+      service: speaker-diarization
+      path: /v1/events/transcription-completed
+    - name: notifications-alerts
+      service: notifications
+      path: /v1/lifecycle-events
+  transcription.failed:
+    - name: notifications-alerts
+      service: notifications
+      path: /v1/lifecycle-events
+  diarization.completed:
+    - name: lecture-intelligence
+      service: lecture-intelligence
+      path: /v1/events/diarization-completed
+    - name: event-extraction
+      service: event-extraction
+      path: /v1/events/transcript-ready
+  diarization.failed: []
+
+  # --- Phase 2: classroom intelligence ----------------------------------------------------
+  transcript.created: []
+  transcript.corrected:
+    - name: lecture-intelligence
+      service: lecture-intelligence
+      path: /v1/events/transcript-created
+    - name: event-extraction
+      service: event-extraction
+      path: /v1/events/transcript-ready
+  lecture.structured:
+    - name: notifications-students
+      service: notifications
+      path: /v1/lifecycle-events
+    - name: transcript-management-concepts
+      service: transcript-management
+      path: /v1/events/lecture-structured
+  events.extracted: []
+  event.confirmed: []
+  event.rejected: []
+  event.published:
+    - name: notifications-students
+      service: notifications
+      path: /v1/lifecycle-events
+  event.updated:
+    - name: notifications-students
+      service: notifications
+      path: /v1/lifecycle-events
+  event.cancelled:
+    - name: notifications-students
+      service: notifications
+      path: /v1/lifecycle-events
+
+  calendar.event_published:
+    - name: calendar-external-sync
+      service: calendar
+      path: /internal/v1/events/calendar
+  calendar.event_updated:
+    - name: calendar-external-sync
+      service: calendar
+      path: /internal/v1/events/calendar
+
+  # --- Phase 3: student experience --------------------------------------------------------
+  content.reported: []
+  content.report_resolved: []

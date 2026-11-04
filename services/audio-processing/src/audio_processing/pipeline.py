@@ -16,6 +16,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, ValidationError
 from pydantic.alias_generators import to_camel
 
+from audio_processing.decode import flac_to_wav, sniff_format
 from audio_processing.ports import (
     AuditClient,
     AuditRecord,
@@ -28,11 +29,12 @@ from audio_processing.ports import (
 from audio_processing.quality import QualityReport, assess
 from audio_processing.results import PipelineResult, SegmentationResult
 from audio_processing.segmentation import Segment, SegmentationConfig, plan_segments
-from audio_processing.wav import analyze_wav, write_wav_range
+from audio_processing.wav import WavFormatError, analyze_wav, write_wav_range
 
 log = structlog.get_logger(__name__)
 
 SERVICE_NAME = "audio-processing"
+SUPPORTED_FORMATS = frozenset({"wav_pcm_s16le", "flac"})
 CONSUMER = SERVICE_NAME  # processed_events.consumer
 EVENT_ID_NAMESPACE = uuid.UUID("0b7f6a52-3c1e-4d7b-9a61-5f2d8c4e9b13")
 
@@ -149,9 +151,26 @@ class ProcessingService:
         os.close(fd)
         return Path(name)
 
+    def as_wav(self, path: Path) -> tuple[Path, bool]:
+        """WAV for ``path`` (FLAC is decoded into a temp file) and whether it is temporary."""
+        if sniff_format(path) == "wav":
+            return path, False
+        wav = self.temp_path(".wav")
+        try:
+            flac_to_wav(path, wav)
+        except Exception:
+            wav.unlink(missing_ok=True)
+            raise
+        return wav, True
+
     # -------------------------------------------------------- 1.8 quality
     def assess_file(self, path: Path) -> QualityReport:
-        return assess(analyze_wav(path))
+        wav, temporary = self.as_wav(path)
+        try:
+            return assess(analyze_wav(wav))
+        finally:
+            if temporary:
+                wav.unlink(missing_ok=True)
 
     # --------------------------------------------------- 1.9 segmentation
     def segment_file(
@@ -160,14 +179,19 @@ class ProcessingService:
         key_prefix: str,
         config: SegmentationConfig | None = None,
     ) -> SegmentationResult:
-        analysis = analyze_wav(path)
-        segments = plan_segments(
-            analysis.frame_db,
-            analysis.frame_ms,
-            analysis.info.duration_ms,
-            config or self.segmentation,
-        )
-        self._write_segments(path, segments, key_prefix)
+        wav, temporary = self.as_wav(path)
+        try:
+            analysis = analyze_wav(wav)
+            segments = plan_segments(
+                analysis.frame_db,
+                analysis.frame_ms,
+                analysis.info.duration_ms,
+                config or self.segmentation,
+            )
+            self._write_segments(wav, segments, key_prefix)
+        finally:
+            if temporary:
+                wav.unlink(missing_ok=True)
         return SegmentationResult(duration_ms=analysis.info.duration_ms, segments=segments)
 
     def _write_segments(self, path: Path, segments: list[Segment], key_prefix: str) -> None:
@@ -193,7 +217,7 @@ class ProcessingService:
             raise ProcessingError(422, "invalid_event", str(exc)) from exc
         if event.type != "recording.uploaded":
             raise ProcessingError(422, "unexpected_event_type", f"got {event.type}")
-        if event.data.audio_format != "wav_pcm_s16le":
+        if event.data.audio_format not in SUPPORTED_FORMATS:
             raise ProcessingError(
                 422, "unsupported_format", f"cannot process {event.data.audio_format}"
             )
@@ -222,7 +246,9 @@ class ProcessingService:
         if self.repository.is_processed(event_id):
             return self._duplicate(data.recording_session_id)
 
-        local = self.temp_path(".wav")
+        local = self.temp_path(".audio")
+        wav: Path | None = None
+        temporary = False
         try:
             self.store.get_to_file(data.storage_uri, local)
             digest = hashlib.sha256()
@@ -240,7 +266,17 @@ class ProcessingService:
                     422, "checksum_mismatch", "stored audio does not match its checksum"
                 )
 
-            analysis = analyze_wav(local)
+            try:
+                wav, temporary = self.as_wav(local)
+            except WavFormatError as exc:
+                raise ProcessingError(422, "undecodable_audio", str(exc)) from exc
+            if (sniff_format(local) == "flac") != (data.audio_format == "flac"):
+                log.warning(
+                    "audio_format.mismatch",
+                    declared=data.audio_format,
+                    recording_session_id=data.recording_session_id,
+                )
+            analysis = analyze_wav(wav)
             report = assess(analysis)
             context = {
                 "recordingSessionId": data.recording_session_id,
@@ -283,7 +319,7 @@ class ProcessingService:
                     self.segmentation,
                 )
                 self._write_segments(
-                    local, segments, segment_key_prefix(self.store, data.storage_uri)
+                    wav, segments, segment_key_prefix(self.store, data.storage_uri)
                 )
                 segment_payload = [
                     s.model_dump(
@@ -328,6 +364,8 @@ class ProcessingService:
                 )
         finally:
             local.unlink(missing_ok=True)
+            if wav is not None and temporary:
+                wav.unlink(missing_ok=True)
 
         try:
             recorded = self.repository.save(event_id, result)

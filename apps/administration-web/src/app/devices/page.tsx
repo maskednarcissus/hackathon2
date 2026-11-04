@@ -5,22 +5,29 @@ import { CommandForm } from '../../components/CommandForm';
 import { ErrorState } from '../../components/ErrorState';
 import { StatusPill } from '../../components/StatusPill';
 import styles from '../../components/dashboard.module.css';
-import { Breadcrumb, Empty, Pagination, ServiceError } from '../../components/ui';
+import { Breadcrumb, Empty, Pagination, ServiceError, Tiles } from '../../components/ui';
 import { getFirmware, getFleetPage, type FleetFilters } from '../../lib/console';
 import { DEVICE_STATUSES, getFleetHealth } from '../../lib/fleet';
 import { diskUsage, formatRelative, issueLabel, statusMeta } from '../../lib/format';
 import { query } from '../../lib/http';
+import { getInstitutionTree } from '../../lib/organization';
 import { FleetTable } from './FleetTable';
 
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Dispositivos — Classroom Intelligence' };
 
+/** Sort keys accepted by device-management `GET /v1/fleet` (`-` = descending). */
 const SORTS = [
-  { value: 'status', label: 'Status (mais urgente primeiro)' },
-  { value: 'lastSeenAt', label: 'Último contato' },
   { value: 'serialNumber', label: 'Número de série' },
+  { value: 'status', label: 'Status' },
+  { value: 'lastSeenAt', label: 'Último contato (mais antigo primeiro)' },
+  { value: '-lastSeenAt', label: 'Último contato (mais recente primeiro)' },
+  { value: 'firmwareVersion', label: 'Firmware (mais antigo primeiro)' },
+  { value: 'campus', label: 'Campus' },
   { value: 'classroom', label: 'Sala' },
 ] as const;
+const DEFAULT_SORT = 'serialNumber';
+const PAGE_SIZE = 25;
 
 type Search = {
   campusId?: string;
@@ -40,13 +47,18 @@ export default async function DevicesPage({
   const page = Math.max(1, Number.parseInt(sp.page ?? '1', 10) || 1);
   const filters: FleetFilters = {
     campusId: sp.campusId || undefined,
-    status: sp.status || undefined,
+    status: sp.status && (DEVICE_STATUSES as readonly string[]).includes(sp.status) ? sp.status : undefined,
     firmwareVersion: sp.firmwareVersion || undefined,
-    q: sp.q || undefined,
-    sort: SORTS.some((s) => s.value === sp.sort) ? sp.sort : 'status',
+    q: sp.q?.trim() || undefined,
+    sort: SORTS.some((s) => s.value === sp.sort) ? sp.sort : DEFAULT_SORT,
     page,
+    pageSize: PAGE_SIZE,
   };
-  const [fleet, firmware] = await Promise.all([getFleetPage(filters), getFirmware()]);
+  const [fleet, firmware, tree] = await Promise.all([
+    getFleetPage(filters),
+    getFirmware(),
+    getInstitutionTree(),
+  ]);
   const trail = [{ href: '/', label: 'Administração' }, { label: 'Dispositivos' }];
 
   // Backwards compatibility: device-management without the Phase 4 console endpoint.
@@ -70,14 +82,15 @@ export default async function DevicesPage({
   }
 
   const hrefFor = (p: number): string =>
-    `/devices${query({ ...filters, sort: filters.sort === 'status' ? undefined : filters.sort, page: p > 1 ? p : undefined })}`;
+    `/devices${query({
+      ...filters,
+      pageSize: undefined,
+      sort: filters.sort === DEFAULT_SORT ? undefined : filters.sort,
+      page: p > 1 ? p : undefined,
+    })}`;
   const now = new Date(fleet.fetchedAt);
-  const versions = firmware.ok
-    ? firmware.data.versions.map((v) => v.version)
-    : fleet.ok
-      ? (fleet.data.facets?.firmwareVersions ?? [])
-      : [];
-  const campuses = fleet.ok ? (fleet.data.facets?.campuses ?? []) : [];
+  const versions = firmware.ok ? firmware.data.versions.map((v) => v.version) : [];
+  const campuses = tree.ok ? tree.data.campuses.map((c) => ({ id: c.id, name: c.name })) : [];
 
   return (
     <main>
@@ -88,12 +101,7 @@ export default async function DevicesPage({
       <form className="filterForm" method="get" role="search" aria-label="Filtrar dispositivos">
         <label>
           Buscar
-          <input
-            type="search"
-            name="q"
-            defaultValue={sp.q ?? ''}
-            placeholder="Série, sala, modelo…"
-          />
+          <input type="search" name="q" defaultValue={sp.q ?? ''} placeholder="Série, sala, campus…" />
         </label>
         <label>
           Campus
@@ -112,7 +120,7 @@ export default async function DevicesPage({
         </label>
         <label>
           Status
-          <select name="status" defaultValue={sp.status ?? ''}>
+          <select name="status" defaultValue={filters.status ?? ''}>
             <option value="">Todos</option>
             {DEVICE_STATUSES.map((s) => (
               <option key={s} value={s}>
@@ -151,87 +159,90 @@ export default async function DevicesPage({
       {firmware.ok && firmware.data.versions.length > 0 ? (
         <p className="muted">
           Distribuição de firmware:{' '}
-          {firmware.data.versions.map((v) => `${v.version} (${v.count})`).join(' · ')}
+          {firmware.data.versions
+            .map((v) => `${v.version}${v.isLatest ? ' (mais recente)' : ''}: ${v.count} (${v.percent}%)`)
+            .join(' · ')}
+          {firmware.data.outdated > 0 ? ` · ${firmware.data.outdated} desatualizado(s)` : ''}
         </p>
       ) : null}
 
       {!fleet.ok ? (
-        <ServiceError
-          title="Não foi possível carregar a frota"
-          message={fleet.error}
-          status={fleet.status}
-        />
-      ) : fleet.data.items.length === 0 ? (
-        <Empty>Nenhum dispositivo corresponde aos filtros.</Empty>
+        <ServiceError title="Não foi possível carregar a frota" message={fleet.error} status={fleet.status} />
       ) : (
         <>
-          <div className={styles.tableWrap}>
-            <table className={styles.table}>
-              <caption aria-live="polite">
-                {fleet.data.total} dispositivo(s) · página {fleet.data.page}
-              </caption>
-              <thead>
-                <tr>
-                  <th scope="col">Status</th>
-                  <th scope="col">Dispositivo</th>
-                  <th scope="col">Campus / sala</th>
-                  <th scope="col">Firmware</th>
-                  <th scope="col">Último contato</th>
-                  <th scope="col">Disco</th>
-                  <th scope="col">Problemas</th>
-                  <th scope="col">Comando</th>
-                </tr>
-              </thead>
-              <tbody>
-                {fleet.data.items.map((d) => (
-                  <tr key={d.deviceId}>
-                    <td>
-                      <StatusPill status={d.status} />
-                    </td>
-                    <td>
-                      <Link href={`/devices/${encodeURIComponent(d.deviceId)}`}>
-                        {d.serialNumber}
-                      </Link>
-                      <div className="muted">{d.model}</div>
-                    </td>
-                    <td>
-                      {d.campusName ?? '—'}
-                      <div className="muted">
-                        {d.classroomName ?? d.classroomId ?? 'Não atribuído'}
-                      </div>
-                    </td>
-                    <td>{d.firmwareVersion}</td>
-                    <td>{formatRelative(d.lastSeenAt, now)}</td>
-                    <td>{diskUsage(d.metrics?.diskFreeBytes, d.metrics?.diskTotalBytes)}</td>
-                    <td className="wrap">
-                      {d.issues.length === 0 ? (
-                        '—'
-                      ) : (
-                        <ul className={styles.issues}>
-                          {d.issues.map((i) => (
-                            <li key={i}>{issueLabel(i)}</li>
-                          ))}
-                        </ul>
-                      )}
-                    </td>
-                    <td>
-                      {d.status === 'decommissioned' ? (
-                        '—'
-                      ) : (
-                        <CommandForm deviceId={d.deviceId} compact />
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <Pagination
-            page={fleet.data.page}
-            pageSize={fleet.data.pageSize}
-            total={fleet.data.total}
-            hrefFor={hrefFor}
+          <Tiles
+            items={[
+              { label: 'Total (filtros)', value: fleet.data.summary.total },
+              ...DEVICE_STATUSES.filter((s) => (fleet.data.summary.byStatus[s] ?? 0) > 0).map((s) => {
+                const m = statusMeta(s);
+                return { label: m.label, icon: m.icon, tone: m.tone, value: fleet.data.summary.byStatus[s] ?? 0 };
+              }),
+            ]}
           />
+          {fleet.data.namesUnavailable ? (
+            <p className="muted" role="note">
+              Nomes de sala e campus indisponíveis no momento (serviço organization fora do ar).
+            </p>
+          ) : null}
+          {fleet.data.items.length === 0 ? (
+            <Empty>Nenhum dispositivo corresponde aos filtros.</Empty>
+          ) : (
+            <div className={styles.tableWrap}>
+              <table className={styles.table}>
+                <caption aria-live="polite">
+                  {fleet.data.total} dispositivo(s) · página {fleet.data.page} de {fleet.data.totalPages}
+                </caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Status</th>
+                    <th scope="col">Dispositivo</th>
+                    <th scope="col">Campus / sala</th>
+                    <th scope="col">Firmware</th>
+                    <th scope="col">Último contato</th>
+                    <th scope="col">Disco</th>
+                    <th scope="col">Problemas</th>
+                    <th scope="col">Comando</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {fleet.data.items.map((d) => (
+                    <tr key={d.deviceId}>
+                      <td>
+                        <StatusPill status={d.status} />
+                      </td>
+                      <td>
+                        <Link href={`/devices/${encodeURIComponent(d.deviceId)}`}>{d.serialNumber}</Link>
+                        <div className="muted">{d.model}</div>
+                      </td>
+                      <td>
+                        {d.campusName ?? '—'}
+                        <div className="muted">{d.classroomName ?? d.classroomId ?? 'Não atribuído'}</div>
+                      </td>
+                      <td>{d.firmwareVersion}</td>
+                      <td>{formatRelative(d.lastSeenAt, now)}</td>
+                      <td>{diskUsage(d.metrics?.diskFreeBytes, d.metrics?.diskTotalBytes)}</td>
+                      <td className="wrap">
+                        {d.issues.length === 0 ? (
+                          '—'
+                        ) : (
+                          <ul className={styles.issues}>
+                            {d.issues.map((i) => (
+                              <li key={i}>{issueLabel(i)}</li>
+                            ))}
+                          </ul>
+                        )}
+                      </td>
+                      <td>
+                        {d.status === 'decommissioned' ? '—' : <CommandForm deviceId={d.deviceId} compact />}
+                        {d.openCommands ? <div className="muted">{d.openCommands} comando(s) em aberto</div> : null}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <Pagination page={fleet.data.page} pageSize={fleet.data.pageSize} total={fleet.data.total} hrefFor={hrefFor} />
         </>
       )}
     </main>

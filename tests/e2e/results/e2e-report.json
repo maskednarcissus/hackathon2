@@ -1,0 +1,175 @@
+{
+  "steps": [
+    {
+      "name": "postgres: fresh database with all migrations",
+      "status": "passed",
+      "detail": "",
+      "seconds": 5.7
+    },
+    {
+      "name": "local stack: dev event bus + services healthy",
+      "status": "passed",
+      "detail": "",
+      "seconds": 4.73
+    },
+    {
+      "name": "organization: holding, institution, campus, classroom, default policy",
+      "status": "passed",
+      "detail": "",
+      "seconds": 0.21
+    },
+    {
+      "name": "identity: start with bootstrap admin for the new institution",
+      "status": "workaround",
+      "detail": "identity can only bootstrap an admin for an institution id known at start-up; no internal-token user provisioning exists",
+      "seconds": 1.58
+    },
+    {
+      "name": "academic-integration: timetable import with a class that just ended",
+      "status": "passed",
+      "detail": "",
+      "seconds": 0.27
+    },
+    {
+      "name": "identity: admin login, professor + student accounts",
+      "status": "passed",
+      "detail": "",
+      "seconds": 0.76
+    },
+    {
+      "name": "academic-integration → identity/calendar/notifications/analytics: access data sync",
+      "status": "passed",
+      "detail": "sync pushed by academic-integration",
+      "seconds": 0.09
+    },
+    {
+      "name": "device-management: provisioning token, registration, classroom assignment",
+      "status": "passed",
+      "detail": "",
+      "seconds": 0.24
+    },
+    {
+      "name": "device-management: signed heartbeat and recording plan",
+      "status": "failed",
+      "detail": "GET /v1/devices/f82ef000-dfb4-4fe0-92f9-fd59777f1930/recording-plan → 502: {\"error\": {\"code\": \"upstream_unavailable\", \"message\": \"academic-integration returned 502\", \"details\": {\"service\": \"academic-integration\", \"status\": 502}}}",
+      "seconds": 0.07
+    },
+    {
+      "name": "audio-ingestion: recording.started event + recording metadata",
+      "status": "passed",
+      "detail": "",
+      "seconds": 0.38
+    },
+    {
+      "name": "audio-ingestion: chunked upload with checksums, complete",
+      "status": "passed",
+      "detail": "3 chunks, status=complete",
+      "seconds": 0.55
+    },
+    {
+      "name": "pipeline: recording.uploaded → processing → recording.segmented → transcription",
+      "status": "passed",
+      "detail": "transcript ccd4921d-62dc-4a97-a85b-05721f819763 (90 segments)",
+      "seconds": 2.04
+    },
+    {
+      "name": "pipeline: diarization assigns anonymous SPEAKER_n labels",
+      "status": "failed",
+      "detail": "timed out after 180s waiting for speaker labels on transcript segments",
+      "seconds": 181.0
+    },
+    {
+      "name": "pipeline: lecture structured (summary, topics)",
+      "status": "failed",
+      "detail": "timed out after 120s waiting for lecture structure",
+      "seconds": 120.35
+    },
+    {
+      "name": "event-extraction: exam announcement extracted and held for professor review",
+      "status": "workaround",
+      "detail": "fake STT emits filler text (no announcement); extraction was re-run with a scripted pt-BR exam segment",
+      "seconds": 60.29
+    },
+    {
+      "name": "event-extraction: professor confirms → published to calendar",
+      "status": "passed",
+      "detail": "",
+      "seconds": 0.14
+    },
+    {
+      "name": "calendar: event with source provenance (recording, segment, quote)",
+      "status": "passed",
+      "detail": "",
+      "seconds": 0.01
+    },
+    {
+      "name": "notifications: student inbox has the new assessment",
+      "status": "failed",
+      "detail": "timed out after 30s waiting for a new_assessment notification for the student",
+      "seconds": 30.33
+    },
+    {
+      "name": "audit: hash chain verifies for the institution",
+      "status": "passed",
+      "detail": "verify={\"tenantId\": \"712313f2-52cf-48ff-b4a4-3df9b85f54b8\", \"valid\": true, \"eventCount\": 25, \"headHash\": \"bc89ca15d3ae58540ab8f01fa4cbf3cb4fbfdc2fbd6fe52313b6cefa65c9b4fe\", \"firstBrokenLink\": null}; lifecycle=['recording.metadata_received', 'upload.started', 'upload.completed', 'audio.quality_assessed', 'audio.segmented', 'transcription.started', 'transcription.completed']",
+      "seconds": 0.02
+    },
+    {
+      "name": "academic-analytics: capture coverage counts the class as captured",
+      "status": "failed",
+      "detail": "capture coverage rows show nothing captured: {\"institutionId\": \"712313f2-52cf-48ff-b4a4-3df9b85f54b8\", \"from\": \"2026-11-04\", \"to\": \"2026-11-04\", \"generatedAt\": \"2026-11-04T17:31:09.216Z\", \"source\": {\"snapshotDays\": 0, \"liveDays\": 1}, \"kind\": \"capture-coverage\", \"columns\": [\"date\", \"campusId\", \"campusName\", \"classroomId\", \"classroomName\", \"scheduled\", \"captured\", \"missed\", \"coverage\"], \"rows\": [{\"date\": \"2026-11-04\", \"campusId\": \"c379283b-0cdd-4d1f-815a-e3017e8e38b8\", \"campusName\": \"Campus Centro\", \"classroomId\": \"717be125-85b9-44d3-8e51-c05db873616a\", \"classroomName\": \"Sala 101\", \"scheduled\": 1, \"captured\": 0, \"missed\": 1, \"coverage\": 0}",
+      "seconds": 0.09
+    }
+  ],
+  "context": {
+    "database": "ci_e2e_d8dfe078ca",
+    "mode": "local",
+    "persistence": "postgres",
+    "institutionId": "712313f2-52cf-48ff-b4a4-3df9b85f54b8",
+    "campusId": "c379283b-0cdd-4d1f-815a-e3017e8e38b8",
+    "classroomId": "717be125-85b9-44d3-8e51-c05db873616a",
+    "policyId": "7042099b-d57e-477b-97bb-f015bdb4c2a1",
+    "holdingCompanyId": "25a46f22-15c2-4378-b525-9e3941682ca0",
+    "scheduledClassId": "95185a71-0263-4ea1-a456-7e7520416e26",
+    "classSectionId": "94a03956-80c3-4c78-8c03-584b75270eb8",
+    "courseId": "4d27f13a-6f9c-40a1-b35f-57fa4f300275",
+    "professorId": "ed28e5c0-c52b-480d-b7b9-6db3ad95bdef",
+    "studentIds": [
+      "6aa46bb9-d1a4-40a1-8384-f45a04bc135a",
+      "cdd081e3-3f36-4861-8e74-328199b0e758",
+      "df10e36b-e749-4932-b86f-1176754e3963",
+      "e769dc2f-112a-475d-bb55-1f01a0230dba",
+      "e77ff51c-4af6-477b-8ef3-881727abb67f",
+      "f82def69-317a-4601-a0cb-7ef9f91ca5ed"
+    ],
+    "classStartsAt": "2026-11-04T16:14:00.000Z",
+    "classEndsAt": "2026-11-04T17:21:00.000Z",
+    "adminUserId": "ff7c9287-2bd9-4f3b-b742-bc5316dcd051",
+    "professorUserId": "807ef001-bc5e-461b-a2e6-ad903d42cc55",
+    "studentUserId": "5ab95481-a3ed-40ce-a561-d1c674b80f65",
+    "deviceId": "f82ef000-dfb4-4fe0-92f9-fd59777f1930",
+    "recordingSessionId": "972ba299-b2ec-4cc4-902f-cf551fad678d",
+    "uploadId": "83c7f9cb-1fd3-4ae1-b685-c279a21f7de6",
+    "transcriptId": "ccd4921d-62dc-4a97-a85b-05721f819763",
+    "extractedEventId": "694ab464-a223-4753-88f9-c77aaf57d175",
+    "calendarEventId": "04a8281c-67e1-4e2e-9094-f366368b3943",
+    "deadLetters": [],
+    "acknowledgedProblems": [
+      {
+        "topic": "calendar.event_published",
+        "subscription": "calendar-external-sync",
+        "lastStatusCode": 200,
+        "lastResponse": "{\"processed\":true,\"upserted\":0,\"deleted\":0,\"skipped\":0,\"failed\":0,\"broken\":0}"
+      },
+      {
+        "topic": "transcription.completed",
+        "subscription": "speaker-diarization",
+        "lastStatusCode": 200,
+        "lastResponse": "{\"failed\":true,\"reason\":\"no audio loader for scheme 'local'\"}"
+      }
+    ]
+  },
+  "notes": [
+    "--- academic-integration log tail ---\n{\"level\":30,\"time\":1793813064982,\"pid\":24064,\"hostname\":\"vm\",\"storage\":\"postgres\",\"syncTargets\":[\"identity\",\"calendar\",\"notifications\",\"academic-analytics\"],\"msg\":\"academic-integration configuration\"}\n{\"level\":30,\"time\":1793813065114,\"pid\":24064,\"hostname\":\"vm\",\"msg\":\"Server listening at http://127.0.0.1:4003\"}\n{\"level\":30,\"time\":1793813065114,\"pid\":24064,\"hostname\":\"vm\",\"msg\":\"Server listening at http://192.0.2.2:4003\"}\n{\"level\":30,\"time\":1793813065201,\"pid\":24064,\"hostname\":\"vm\",\"reqId\":\"req-1\",\"req\":{\"method\":\"GET\",\"url\":\"/health\",\"host\":\"127.0.0.1:4003\",\"remoteAddress\":\"127.0.0.1\",\"remotePort\":58828},\"msg\":\"incoming request\"}\n{\"level\":30,\"time\":1793813065222,\"pid\":24064,\"hostname\":\"vm\",\"reqId\":\"req-1\",\"res\":{\"statusCode\":200},\"responseTime\":17.44657300000017,\"msg\":\"request completed\"}\n{\"level\":30,\"time\":1793813069347,\"pid\":24064,\"hostname\":\"vm\",\"reqId\":\"req-2\",\"req\":{\"method\":\"POST\",\"url\":\"/v1/imports\",\"host\":\"127.0.0.1:4003\",\"remoteAddress\":\"127.0.0.1\",\"remotePort\":58838},\"msg\":\"incoming request\"}\n{\"level\":30,\"time\":1793813069509,\"pid\":24064,\"hostname\":\"vm\",\"reqId\":\"req-2\",\"res\":{\"statusCode\":201},\"responseTime\":161.39543200000026,\"msg\":\"request completed\"}\n{\"level\":30,\"time\":1793813069558,\"pid\":24064,\"hostname\":\"vm\",\"reqId\":\"req-3\",\"req\":{\"method\":\"GET\",\"url\":\"/v1/scheduled-classes?classroomId=717be125-85b9-44d3-8e51-c05db873616a&from=2026-11-04T15%3A24%3A27.553329%2B00%3A00&to=2026-11-04T20%3A24%3A27.553329%2B00%3A00\",\"host\":\"127.0.0.1:4003\",\"remoteAddress\":\"127.0.0.1\",\"remotePort\":58838},\"msg\":\"incoming request\"}\n{\"level\":30,\"time\":1793813069573,\"pid\":24064,\"hostname\":\"vm\",\"reqId\":\"req-3\",\"res\":{\"statusCode\":200},\"responseTime\":14.76578900000004,\"msg\":\"request completed\"}\n{\"level\":30,\"time\":1793813069576,\"pid\":24064,\"hostname\":\"vm\",\"reqId\":\"req-4\",\"req\":{\"method\":\"GET\",\"url\":\"/v1/class-sections/94a03956-80c3-4c78-8c03-584b75270eb8/roster\",\"host\":\"127.0.0.1:4003\",\"remoteAddress\":\"127.0.0.1\",\"remotePort\":58838},\"msg\":\"incoming request\"}\n{\"level\":30,\"time\":1793813069607,\"pid\":24064,\"hostname\":\"vm\",\"reqId\":\"req-4\",\"res\":{\"statusCode\":200},\"responseTime\":30.68564199999946,\"msg\":\"request completed\"}\n{\"level\":30,\"time\":1793813070368,\"pid\":24064,\"hostname\":\"vm\",\"reqId\":\"req-5\",\"req\":{\"method\":\"POST\",\"url\":\"/v1/sync/push\",\"host\":\"127.0.0.1:4003\",\"remoteAddress\":\"127.0.0.1\",\"remotePort\":58838},\"msg\":\"incoming request\"}\n{\"level\":30,\"time\":1793813070442,\"pid\":24064,\"hostname\":\"vm\",\"reqId\":\"req-5\",\"res\":{\"statusCode\":200},\"responseTime\":73.34469400000035,\"msg\":\"request completed\"}\n{\"level\":30,\"time\":1793813070800,\"pid\":24064,\"hostname\":\"vm\",\"reqId\":\"req-6\",\"req\":{\"method\":\"GET\",\"url\":\"/v1/classrooms/717be125-85b9-44d3-8e51-c05db873616a/recording-plan?from=2026-11-04T17%3A24%3A30.796Z&to=2026-11-05T17%3A24%3A30.796Z\",\"host\":\"127.0.0.1:4003\",\"remoteAddress\":\"127.0.0.1\",\"remotePort\":58842},\"msg\":\"incoming request\"}\n{\"level\":30,\"time\":1793813070812,\"pid\":24064,\"hostname\":\"vm\",\"reqId\":\"req-6\",\"res\":{\"statusCode\":502},\"responseTime\":11.78907799999979,\"msg\":\"request completed\"}\n{\"level\":30,\"time\":1793813075414,\"pid\":24064,\"hostname\":\"vm\",\"reqId\":\"req-7\",\"req\":{\"method\":\"GET\",\"url\":\"/v1/scheduled-classes/95185a71-0263-4ea1-a456-7e7520416e26\",\"host\":\"127.0.0.1:4003\",\"remoteAddress\":\"127.0.0.1\",\"remotePort\":36752},\"msg\":\"incoming request\"}\n{\"level\":30,\"time\":1793813075422,\"pid\":24064,\"hostname\":\"vm\",\"reqId\":\"req-7\",\"res\":{\"statusCode\":200},\"responseTime\":8.187036999999691,\"msg\":\"request completed\"}\n{\"level\":30,\"time\":1793813438528,\"pid\":24064,\"hostname\":\"vm\",\"reqId\":\"req-8\",\"req\":{\"method\":\"GET\",\"url\":\"/v1/scheduled-classes/95185a71-0263-4ea1-a456-7e7520416e26\",\"host\":\"127.0.0.1:4003\",\"remoteAddress\":\"127.0.0.1\",\"remotePort\":59020},\"msg\":\"incoming request\"}\n{\"level\":30,\"time\":1793813438547,\"pid\":24064,\"hostname\":\"vm\",\"reqId\":\"req-8\",\"res\":{\"statusCode\":200},\"responseTime\":18.170429999998305,\"msg\":\"request completed\"}\n{\"level\":30,\"time\":1793813438551,\"pid\":24064,\"hostname\":\"vm\",\"reqId\":\"req-9\",\"req\":{\"method\":\"GET\",\"url\":\"/v1/scheduled-classes?classSectionId=94a03956-80c3-4c78-8c03-584b75270eb8&from=2026-11-04T17%3A14%3A00%2B00%3A00&to=2027-03-04T16%3A14%3A00%2B00%3A00\",\"host\":\"127.0.0.1:4003\",\"remoteAddress\":\"127.0.0.1\",\"remotePort\":59020},\"msg\":\"incoming request\"}\n{\"level\":30,\"time\":1793813438557,\"pid\":24064,\"hostname\":\"vm\",\"reqId\":\"req-9\",\"res\":{\"statusCode\":200},\"responseTime\":6.715159000013955,\"msg\":\"request completed\"}\n{\"level\":30,\"time\":1793813469202,\"pid\":24064,\"hostname\":\"vm\",\"reqId\":\"req-a\",\"req\":{\"method\":\"GET\",\"url\":\"/v1/scheduled-classes?classSectionId=94a03956-80c3-4c78-8c03-584b75270eb8&from=2026-11-03T00%3A00%3A00.000Z&to=2026-11-06T00%3A00%3A00.000Z&includeCancelled=true&limit=1000\",\"host\":\"127.0.0.1:4003\",\"remoteAddress\":\"127.0.0.1\",\"remotePort\":38504},\"msg\":\"incoming request\"}\n{\"level\":30,\"time\":1793813469211,\"pid\":24064,\"hostname\":\"vm\",\"reqId\":\"req-a\",\"res\":{\"statusCode\":200},\"responseTime\":9.254466000013053,\"msg\":\"request completed\"}"
+  ]
+}

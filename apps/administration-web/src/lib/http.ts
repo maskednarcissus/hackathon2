@@ -1,10 +1,13 @@
 /**
  * Server-side HTTP client for the Phase 4 backends. Import only from Server Components,
- * Server Actions and Route Handlers — it reads the admin API token from the environment.
+ * Server Actions and Route Handlers — it reads the admin credentials from the environment.
  *
- * Authentication: until the administration login flow lands, every call carries a
- * coordinator/admin bearer token from ADMIN_API_TOKEN (identity §2). Actions are attributed
- * to ADMIN_USER_ID.
+ * Authentication until the administration login flow lands (per service, as implemented):
+ * - academic-analytics, identity: an identity access token (JWT, role coordinator/admin of the
+ *   institution) in ADMIN_BEARER_TOKEN — analytics also accepts AUTH_DISABLED=true locally.
+ * - device-management, organization: the static ADMIN_API_TOKEN.
+ * - notifications: ADMIN_API_TOKEN or the identity JWT (whichever is configured).
+ * Actions are attributed to ADMIN_USER_ID (sent as `actorId` and `X-Actor-Id`).
  */
 import type { ApiResult } from './fleet';
 
@@ -40,9 +43,28 @@ export const institutionId = (): string =>
 export const actorId = (): string =>
   process.env.ADMIN_USER_ID ?? '00000000-0000-4000-8000-0000000000ad';
 
-export function authHeaders(): Record<string, string> {
-  const token = process.env.ADMIN_API_TOKEN ?? process.env.DEVICE_MANAGEMENT_TOKEN;
-  return token ? { authorization: `Bearer ${token}` } : {};
+function tokenFor(service: Service): string | undefined {
+  const env = process.env;
+  switch (service) {
+    case 'analytics':
+    case 'identity':
+      return env.ADMIN_BEARER_TOKEN;
+    case 'notifications':
+      return env.ADMIN_API_TOKEN ?? env.ADMIN_BEARER_TOKEN;
+    case 'devices':
+      return env.ADMIN_API_TOKEN ?? env.DEVICE_MANAGEMENT_TOKEN;
+    case 'organization':
+      return env.ADMIN_API_TOKEN;
+  }
+}
+
+export function authHeaders(service: Service): Record<string, string> {
+  const token = tokenFor(service);
+  const actor = actorId();
+  return {
+    ...(token ? { authorization: `Bearer ${token}` } : {}),
+    ...(/^[0-9a-f-]{36}$/i.test(actor) ? { 'x-actor-id': actor } : {}),
+  };
 }
 
 export function query(
@@ -84,7 +106,7 @@ export async function apiRequest<T>(
       cache: 'no-store',
       headers: {
         accept: 'application/json',
-        ...authHeaders(),
+        ...authHeaders(service),
         ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}),
       },
       ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),

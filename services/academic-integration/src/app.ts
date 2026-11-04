@@ -8,10 +8,12 @@ import {
   type OrganizationClient,
 } from './clients.js';
 import { timetableCsvToPayload } from './csv.js';
-import type { ImportIssue, ImportReport, ScheduledClass } from './domain.js';
+import type { ImportReport, ScheduledClass } from './domain.js';
 import { HttpError, installErrorHandler } from './errors.js';
 import { IDENTIFICATION_TOLERANCE_MS, identifyClass, type Candidate } from './identification.js';
-import { planImport } from './importer.js';
+import { createImportRunner, type ImportRunner } from './import-runner.js';
+import { registerConnectorRoutes } from './connectors/routes.js';
+import type { ConnectorService } from './connectors/service.js';
 import { requireInternalToken } from './platform/internal-auth.js';
 import {
   DuplicateDataError,
@@ -20,7 +22,7 @@ import {
 } from './repository.js';
 import type { SyncService } from './sync.js';
 import { buildAlertContext } from './alert-context.js';
-import { ImportPayloadSchema, formatPath, type ImportPayloadInput } from './schemas.js';
+import type { ImportPayloadInput } from './schemas.js';
 
 export interface Clock {
   now(): Date;
@@ -39,6 +41,8 @@ export interface AcademicDeps {
   devices?: DeviceDirectory;
   /** INTERNAL_API_TOKEN: required as x-internal-token on /internal/* and sync routes when set. */
   internalToken?: string;
+  /** SIS / LMS connectors (Phase 6.5 / 6.6); built from the app's import runner. */
+  connectors?: (runImport: ImportRunner) => ConnectorService;
 }
 
 const iso = z.string().datetime({ offset: true });
@@ -58,20 +62,6 @@ const IdentificationSchema = z
     message: 'endedAt must be after startedAt',
     path: ['endedAt'],
   });
-
-const emptyCounts = (): ImportReport['counts'] => {
-  const c = () => ({ created: 0, updated: 0, unchanged: 0 });
-  return {
-    terms: c(),
-    courses: c(),
-    professors: c(),
-    students: c(),
-    classSections: c(),
-    enrollments: c(),
-    scheduledClasses: c(),
-    scheduledClassesCancelled: 0,
-  };
-};
 
 export function buildApp(deps: AcademicDeps): FastifyInstance {
   const repo = deps.repository;
@@ -103,67 +93,15 @@ export function buildApp(deps: AcademicDeps): FastifyInstance {
     (_req, body, done) => done(null, body),
   );
 
-  async function runImport(
-    raw: unknown,
-    format: 'json' | 'csv',
-    preErrors: ImportIssue[],
-    institutionIdHint: string | null,
-  ): Promise<ImportReport> {
-    const importId = newId();
-    const createdAt = clock.now().toISOString();
-    const parsed = preErrors.length === 0 ? ImportPayloadSchema.safeParse(raw) : null;
-    if (!parsed || !parsed.success) {
-      const errors =
-        parsed && !parsed.success
-          ? parsed.error.issues.map((i) => ({
-              path: formatPath(i.path) || '(root)',
-              code: i.code,
-              message: i.message,
-            }))
-          : preErrors;
-      const institutionId =
-        typeof (raw as { institutionId?: unknown } | null)?.institutionId === 'string'
-          ? String((raw as { institutionId: string }).institutionId)
-          : (institutionIdHint ?? '');
-      const dryRun = (raw as { dryRun?: unknown } | null)?.dryRun === true;
-      const report: ImportReport = {
-        importId,
-        institutionId,
-        format,
-        dryRun,
-        status: 'rejected',
-        errors,
-        warnings: [],
-        counts: emptyCounts(),
-        createdAt,
-      };
-      await repo.saveImportReport(report);
-      return report;
-    }
-    const payload = parsed.data;
-    const plan = planImport(payload, await repo.snapshot(payload.institutionId), newId);
-    const rejected = plan.errors.length > 0;
-    if (!rejected && !payload.dryRun) {
-      await repo.apply(plan.changes);
-      // Fire-and-forget: the import response never waits for downstream services.
-      deps.sync
-        ?.schedule(payload.institutionId)
-        .catch((err: unknown) => app.log.warn({ err }, 'sync push failed'));
-    }
-    const report: ImportReport = {
-      importId,
-      institutionId: payload.institutionId,
-      format,
-      dryRun: payload.dryRun,
-      status: rejected ? 'rejected' : payload.dryRun ? 'validated' : 'applied',
-      errors: plan.errors,
-      warnings: plan.warnings,
-      counts: plan.counts,
-      createdAt,
-    };
-    await repo.saveImportReport(report);
-    return report;
-  }
+  const runImport = createImportRunner({
+    repository: repo,
+    clock,
+    newId,
+    ...(deps.sync ? { sync: deps.sync } : {}),
+    onSyncError: (err) => app.log.warn({ err }, 'sync push failed'),
+  });
+
+  if (deps.connectors) registerConnectorRoutes(app, deps.connectors(runImport), internal);
 
   const statusFor = (r: ImportReport): number =>
     r.status === 'rejected' ? 422 : r.status === 'validated' ? 200 : 201;

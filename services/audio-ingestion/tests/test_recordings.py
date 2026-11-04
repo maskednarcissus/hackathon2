@@ -46,7 +46,7 @@ def test_validation_rules(harness: Harness) -> None:
         {"sampleRate": 8000},
         {"channels": 0},
         {"audioFormat": "mp3"},
-        {"audioFormat": "flac"},
+        {"audioFormat": "opus"},
         {"checksumSha256": "abc"},
         {"startedAt": "2026-11-04T19:00:00"},
         {"unexpected": True},

@@ -32,3 +32,12 @@ resource "google_secret_manager_secret" "device_signing_key" {
     auto {}
   }
 }
+
+# Shared service-to-service token (INTERNAL_API_TOKEN, header x-internal-token).
+resource "google_secret_manager_secret" "internal_api_token" {
+  secret_id = "ci-internal-api-token-${var.environment}"
+
+  replication {
+    auto {}
+  }
+}

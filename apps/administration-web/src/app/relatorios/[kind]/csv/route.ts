@@ -19,7 +19,7 @@ export async function GET(
   let upstream: Response;
   try {
     upstream = await fetch(`${serviceUrl('analytics')}${reportCsvPath(kind, { from, to })}`, {
-      headers: { accept: 'text/csv', ...authHeaders() },
+      headers: { accept: 'text/csv', ...authHeaders('analytics') },
       cache: 'no-store',
       signal: AbortSignal.timeout(30_000),
     });

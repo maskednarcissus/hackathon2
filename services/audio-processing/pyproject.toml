@@ -15,6 +15,7 @@ dependencies = [
     "cryptography>=43.0.0",
     "httpx>=0.27.0",
     "numpy>=2.0.0",
+    "soundfile>=0.12.1",
     "psycopg[binary]>=3.2.0",
     "psycopg-pool>=3.2.0",
 ]
@@ -62,5 +63,5 @@ strict = true
 mypy_path = "src"
 
 [[tool.mypy.overrides]]
-module = ["google.*"]
+module = ["google.*", "soundfile"]
 ignore_missing_imports = true

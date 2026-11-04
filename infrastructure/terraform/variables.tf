@@ -36,3 +36,30 @@ variable "audio_retention_days" {
   type        = number
   default     = 90
 }
+
+variable "service_urls" {
+  description = "Cloud Run base URL per logical service name (keys as in infrastructure/events/subscriptions.yaml)"
+  type        = map(string)
+  default     = {}
+}
+
+variable "scheduled_institution_ids" {
+  description = "Institutions that get daily analytics snapshot and retention jobs"
+  type        = list(string)
+  default     = []
+}
+
+variable "retention_dry_run" {
+  description = "Run scheduled retention as a dry run (no deletions)"
+  type        = bool
+  default     = true
+}
+
+variable "group_holding_companies" {
+  description = "Holding companies for Group Intelligence reader views: key = slug, value = { id, readers = [IAM members] }"
+  type = map(object({
+    id      = string
+    readers = list(string)
+  }))
+  default = {}
+}

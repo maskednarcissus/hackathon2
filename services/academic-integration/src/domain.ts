@@ -100,7 +100,7 @@ export interface EntityCounts {
 export interface ImportReport {
   importId: string;
   institutionId: string;
-  format: 'json' | 'csv';
+  format: 'json' | 'csv' | 'connector';
   dryRun: boolean;
   status: 'applied' | 'validated' | 'rejected';
   errors: ImportIssue[];

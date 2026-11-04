@@ -1,0 +1,193 @@
+{
+ "routes": [
+  {
+   "path": "/webservice/rest/server.php",
+   "query": {
+    "wsfunction": "core_course_get_courses"
+   },
+   "responses": [
+    {
+     "body": [
+      {
+       "id": 1,
+       "shortname": "Site",
+       "fullname": "Moodle",
+       "format": "site",
+       "idnumber": ""
+      },
+      {
+       "id": 10,
+       "shortname": "DIR101-A",
+       "fullname": "Direito Constitucional I — A",
+       "idnumber": "1001",
+       "format": "topics"
+      },
+      {
+       "id": 11,
+       "shortname": "SANDBOX",
+       "fullname": "Sandbox",
+       "idnumber": "",
+       "format": "topics"
+      },
+      {
+       "id": 12,
+       "shortname": "ECO-X",
+       "fullname": "Eco",
+       "idnumber": "9999",
+       "format": "topics"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/webservice/rest/server.php",
+   "query": {
+    "wsfunction": "core_enrol_get_enrolled_users",
+    "courseid": "10",
+    "options[1][value]": "0"
+   },
+   "responses": [
+    {
+     "body": [
+      {
+       "id": 21,
+       "idnumber": "2026001",
+       "fullname": "Bruno Lima (Moodle)",
+       "email": "bruno.moodle@uni.example",
+       "roles": [
+        {
+         "roleid": 5,
+         "shortname": "student"
+        }
+       ]
+      },
+      {
+       "id": 22,
+       "idnumber": "P1",
+       "fullname": "Ana Souza",
+       "email": "ana.souza@uni.example",
+       "roles": [
+        {
+         "roleid": 3,
+         "shortname": "editingteacher"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/webservice/rest/server.php",
+   "query": {
+    "wsfunction": "core_enrol_get_enrolled_users",
+    "courseid": "10",
+    "options[1][value]": "2"
+   },
+   "responses": [
+    {
+     "body": [
+      {
+       "id": 23,
+       "idnumber": "",
+       "fullname": "Sem SIS",
+       "email": "semsis@uni.example",
+       "roles": [
+        {
+         "roleid": 5,
+         "shortname": "student"
+        }
+       ]
+      },
+      {
+       "id": 24,
+       "idnumber": "2026004",
+       "fullname": "Davi Melo",
+       "email": "davi@uni.example",
+       "roles": [
+        {
+         "roleid": 5,
+         "shortname": "student"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/webservice/rest/server.php",
+   "query": {
+    "wsfunction": "core_enrol_get_enrolled_users",
+    "courseid": "10",
+    "options[1][value]": "4"
+   },
+   "responses": [
+    {
+     "body": []
+    }
+   ]
+  },
+  {
+   "path": "/webservice/rest/server.php",
+   "query": {
+    "wsfunction": "core_enrol_get_enrolled_users",
+    "courseid": "12"
+   },
+   "responses": [
+    {
+     "body": [
+      {
+       "id": 25,
+       "idnumber": "2026005",
+       "fullname": "Eva",
+       "email": "eva@uni.example",
+       "roles": [
+        {
+         "roleid": 5,
+         "shortname": "student"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "method": "POST",
+   "path": "/webservice/rest/server.php",
+   "query": {
+    "wsfunction": "mod_forum_add_discussion"
+   },
+   "responses": [
+    {
+     "body": {
+      "discussionid": 555,
+      "warnings": []
+     }
+    }
+   ]
+  },
+  {
+   "method": "POST",
+   "path": "/webservice/rest/server.php",
+   "query": {
+    "wsfunction": "core_calendar_create_calendar_events"
+   },
+   "responses": [
+    {
+     "body": {
+      "events": [
+       {
+        "id": 777,
+        "name": "Prova"
+       }
+      ],
+      "warnings": []
+     }
+    }
+   ]
+  }
+ ]
+}

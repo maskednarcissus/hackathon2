@@ -37,8 +37,8 @@ from audio_ingestion.ports import (
 log = structlog.get_logger(__name__)
 
 SERVICE_NAME = "audio-ingestion"
-CONTENT_TYPES = {"wav_pcm_s16le": "audio/wav"}
-EXTENSIONS = {"wav_pcm_s16le": "wav"}
+CONTENT_TYPES = {"wav_pcm_s16le": "audio/wav", "flac": "audio/flac"}
+EXTENSIONS = {"wav_pcm_s16le": "wav", "flac": "flac"}
 
 
 class IngestionError(Exception):

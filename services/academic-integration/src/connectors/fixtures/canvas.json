@@ -1,0 +1,213 @@
+{
+ "routes": [
+  {
+   "path": "/api/v1/courses",
+   "query": {
+    "page": "2"
+   },
+   "responses": [
+    {
+     "body": [
+      {
+       "id": 102,
+       "name": "Economia"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/api/v1/courses",
+   "responses": [
+    {
+     "headers": {
+      "link": "<https://canvas.example/api/v1/courses?page=2&per_page=2>; rel=\"next\", <https://canvas.example/api/v1/courses?page=1&per_page=2>; rel=\"first\""
+     },
+     "body": [
+      {
+       "id": 101,
+       "name": "Direito Constitucional I"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/api/v1/courses/101/sections",
+   "responses": [
+    {
+     "body": [
+      {
+       "id": 201,
+       "name": "A",
+       "sis_section_id": "1001",
+       "course_id": 101
+      },
+      {
+       "id": 202,
+       "name": "Sandbox",
+       "sis_section_id": null,
+       "course_id": 101
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/api/v1/courses/102/sections",
+   "responses": [
+    {
+     "body": [
+      {
+       "id": 203,
+       "name": "X",
+       "sis_section_id": "NOPE",
+       "course_id": 102
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/api/v1/courses/101/enrollments",
+   "query": {
+    "page": "2"
+   },
+   "responses": [
+    {
+     "body": [
+      {
+       "id": 40,
+       "course_section_id": 201,
+       "enrollment_state": "completed",
+       "type": "StudentEnrollment",
+       "user": {
+        "id": 4,
+        "name": "Davi Melo",
+        "sis_user_id": "2026004",
+        "login_id": "davi@uni.example"
+       }
+      },
+      {
+       "id": 50,
+       "course_section_id": 201,
+       "enrollment_state": "active",
+       "type": "StudentEnrollment",
+       "user": {
+        "id": 5,
+        "name": "Sem SIS",
+        "sis_user_id": null,
+        "login_id": "semsis@uni.example"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/api/v1/courses/101/enrollments",
+   "responses": [
+    {
+     "status": 429,
+     "headers": {
+      "retry-after": "1"
+     },
+     "body": {
+      "errors": [
+       {
+        "message": "Rate Limit Exceeded"
+       }
+      ]
+     }
+    },
+    {
+     "headers": {
+      "link": "<https://canvas.example/api/v1/courses/101/enrollments?page=2&per_page=2>; rel=\"next\""
+     },
+     "body": [
+      {
+       "id": 10,
+       "course_section_id": 201,
+       "enrollment_state": "active",
+       "type": "StudentEnrollment",
+       "user": {
+        "id": 1,
+        "name": "Bruno Lima",
+        "sis_user_id": "2026001",
+        "login_id": "bruno@uni.example"
+       }
+      },
+      {
+       "id": 20,
+       "course_section_id": 201,
+       "enrollment_state": "deleted",
+       "type": "StudentEnrollment",
+       "user": {
+        "id": 2,
+        "name": "Carla Dias",
+        "sis_user_id": "2026002",
+        "login_id": "carla@uni.example"
+       }
+      },
+      {
+       "id": 30,
+       "course_section_id": 202,
+       "enrollment_state": "active",
+       "type": "StudentEnrollment",
+       "user": {
+        "id": 3,
+        "name": "Fora",
+        "sis_user_id": "2026009",
+        "login_id": "fora@uni.example"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/api/v1/courses/102/enrollments",
+   "responses": [
+    {
+     "body": [
+      {
+       "id": 10,
+       "course_section_id": 203,
+       "enrollment_state": "active",
+       "type": "StudentEnrollment",
+       "user": {
+        "id": 1,
+        "name": "Bruno Lima",
+        "sis_user_id": "2026001",
+        "login_id": "bruno@uni.example"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/courses/C-101/discussion_topics",
+   "responses": [
+    {
+     "body": {
+      "id": 9001,
+      "title": "x"
+     }
+    }
+   ]
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/calendar_events",
+   "responses": [
+    {
+     "body": {
+      "id": 9002
+     }
+    }
+   ]
+  }
+ ]
+}

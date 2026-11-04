@@ -1,0 +1,245 @@
+{
+ "routes": [
+  {
+   "method": "POST",
+   "path": "/learn/api/public/v1/oauth2/token",
+   "responses": [
+    {
+     "body": {
+      "access_token": "bb-token-1",
+      "token_type": "bearer",
+      "expires_in": 3600
+     }
+    },
+    {
+     "body": {
+      "access_token": "bb-token-2",
+      "token_type": "bearer",
+      "expires_in": 3600
+     }
+    }
+   ]
+  },
+  {
+   "path": "/learn/api/public/v3/courses",
+   "query": {
+    "offset": "2"
+   },
+   "responses": [
+    {
+     "body": {
+      "results": [
+       {
+        "id": "_3_1",
+        "courseId": "MAPPED",
+        "externalId": ""
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "path": "/learn/api/public/v3/courses",
+   "responses": [
+    {
+     "body": {
+      "results": [
+       {
+        "id": "_1_1",
+        "courseId": "DIR101-A",
+        "externalId": "1001",
+        "name": "Direito"
+       },
+       {
+        "id": "_2_1",
+        "courseId": "ECO",
+        "externalId": "X",
+        "name": "Eco"
+       }
+      ],
+      "paging": {
+       "nextPage": "/learn/api/public/v3/courses?offset=2&limit=2&fields=id,courseId,externalId,name"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "path": "/learn/api/public/v1/courses/_1_1/users",
+   "query": {
+    "offset": "3"
+   },
+   "responses": [
+    {
+     "body": {
+      "results": [
+       {
+        "userId": "_u4",
+        "courseRoleId": "Student",
+        "availability": {
+         "available": "Yes"
+        },
+        "user": {
+         "id": "_u4",
+         "externalId": "2026004",
+         "name": {
+          "given": "Davi",
+          "family": "Melo"
+         },
+         "contact": {
+          "email": "davi@uni.example"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "path": "/learn/api/public/v1/courses/_1_1/users",
+   "responses": [
+    {
+     "status": 401,
+     "body": {
+      "status": 401,
+      "message": "Token expired"
+     }
+    },
+    {
+     "body": {
+      "results": [
+       {
+        "userId": "_u1",
+        "courseRoleId": "Student",
+        "availability": {
+         "available": "Yes"
+        },
+        "user": {
+         "id": "_u1",
+         "externalId": "2026001",
+         "name": {
+          "given": "Bruno",
+          "family": "Lima"
+         },
+         "contact": {
+          "email": "bruno@uni.example"
+         }
+        }
+       },
+       {
+        "userId": "_u9",
+        "courseRoleId": "Instructor",
+        "availability": {
+         "available": "Yes"
+        },
+        "user": {
+         "id": "_u9",
+         "externalId": "P1",
+         "name": {
+          "given": "Ana",
+          "family": "Souza"
+         },
+         "contact": {
+          "email": "ana.souza@uni.example"
+         }
+        }
+       },
+       {
+        "userId": "_u2",
+        "courseRoleId": "Student",
+        "availability": {
+         "available": "No"
+        },
+        "user": {
+         "id": "_u2",
+         "externalId": "2026002",
+         "name": {
+          "given": "Carla",
+          "family": "Dias"
+         },
+         "contact": {
+          "email": "carla@uni.example"
+         }
+        }
+       }
+      ],
+      "paging": {
+       "nextPage": "/v1/courses/_1_1/users?offset=3&limit=2&expand=user"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "path": "/learn/api/public/v1/courses/_2_1/users",
+   "responses": [
+    {
+     "body": {
+      "results": [
+       {
+        "userId": "_u1",
+        "courseRoleId": "Student",
+        "availability": {
+         "available": "Yes"
+        },
+        "user": {
+         "id": "_u1",
+         "externalId": "2026001",
+         "name": {
+          "given": "Bruno",
+          "family": "Lima"
+         },
+         "contact": {
+          "email": "bruno@uni.example"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "path": "/learn/api/public/v1/courses/_3_1/users",
+   "responses": [
+    {
+     "status": 403,
+     "body": {
+      "status": 403,
+      "message": "Forbidden"
+     }
+    }
+   ]
+  },
+  {
+   "method": "POST",
+   "path": "/learn/api/public/v1/courses/_1_1/announcements",
+   "responses": [
+    {
+     "status": 403,
+     "body": {
+      "status": 403
+     }
+    },
+    {
+     "body": {
+      "id": "_a1"
+     }
+    }
+   ]
+  },
+  {
+   "method": "POST",
+   "path": "/learn/api/public/v1/calendars/items",
+   "responses": [
+    {
+     "body": {
+      "id": "_ci1"
+     }
+    }
+   ]
+  }
+ ]
+}

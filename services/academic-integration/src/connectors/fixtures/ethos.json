@@ -1,0 +1,570 @@
+{
+ "routes": [
+  {
+   "method": "POST",
+   "path": "/auth",
+   "responses": [
+    {
+     "body": "eyJ.ethos.jwt"
+    }
+   ]
+  },
+  {
+   "path": "/api/academic-periods/AP1",
+   "responses": [
+    {
+     "body": {
+      "id": "AP1",
+      "code": "202620",
+      "title": "2026/2",
+      "startOn": "2026-08-03T00:00:00Z",
+      "endOn": "2026-12-11T23:59:59Z"
+     }
+    }
+   ]
+  },
+  {
+   "path": "/api/sections",
+   "query": {
+    "offset": "0",
+    "criteria": "{\"academicPeriod\":{\"id\":\"AP1\"}}"
+   },
+   "responses": [
+    {
+     "headers": {
+      "x-total-count": "3"
+     },
+     "body": [
+      {
+       "id": "S1",
+       "code": "202620-10001",
+       "number": "01",
+       "course": {
+        "id": "C1"
+       },
+       "academicPeriod": {
+        "id": "AP1"
+       }
+      },
+      {
+       "id": "S2",
+       "code": "202620-10002",
+       "number": "02",
+       "course": {
+        "id": "C1"
+       },
+       "academicPeriod": {
+        "id": "AP1"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/api/sections",
+   "query": {
+    "offset": "2",
+    "criteria": "{\"academicPeriod\":{\"id\":\"AP1\"}}"
+   },
+   "responses": [
+    {
+     "headers": {
+      "x-total-count": "3"
+     },
+     "body": [
+      {
+       "id": "S3",
+       "code": "202620-10003",
+       "number": "01",
+       "course": {
+        "id": "C2"
+       },
+       "academicPeriod": {
+        "id": "AP1"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/api/courses/C1",
+   "responses": [
+    {
+     "body": {
+      "id": "C1",
+      "titles": [
+       {
+        "type": {
+         "id": "T"
+        },
+        "value": "Direito Constitucional I"
+       }
+      ],
+      "subject": {
+       "id": "SUBJ1"
+      },
+      "number": "101"
+     }
+    }
+   ]
+  },
+  {
+   "path": "/api/courses/C2",
+   "responses": [
+    {
+     "body": {
+      "id": "C2",
+      "titles": [
+       {
+        "value": "Microeconomia"
+       }
+      ],
+      "subject": {
+       "id": "SUBJ2"
+      },
+      "number": "110"
+     }
+    }
+   ]
+  },
+  {
+   "path": "/api/subjects/SUBJ1",
+   "responses": [
+    {
+     "body": {
+      "id": "SUBJ1",
+      "abbreviation": "DIR",
+      "title": "Direito"
+     }
+    }
+   ]
+  },
+  {
+   "path": "/api/subjects/SUBJ2",
+   "responses": [
+    {
+     "body": {
+      "id": "SUBJ2",
+      "abbreviation": "ECO",
+      "title": "Economia"
+     }
+    }
+   ]
+  },
+  {
+   "path": "/api/instructional-events",
+   "query": {
+    "criteria": "{\"section\":{\"id\":\"S1\"}}"
+   },
+   "responses": [
+    {
+     "headers": {
+      "x-total-count": "1"
+     },
+     "body": [
+      {
+       "id": "IE1",
+       "section": {
+        "id": "S1"
+       },
+       "recurrence": {
+        "timePeriod": {
+         "startOn": "2026-08-03T22:00:00Z",
+         "endOn": "2026-08-03T23:40:00Z"
+        },
+        "repeatRule": {
+         "type": "weekly",
+         "daysOfWeek": [
+          "monday",
+          "wednesday"
+         ]
+        }
+       },
+       "locations": [
+        {
+         "location": {
+          "type": "room",
+          "room": {
+           "id": "ROOM-GUID-1"
+          }
+         }
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/api/instructional-events",
+   "query": {
+    "criteria": "{\"section\":{\"id\":\"S2\"}}"
+   },
+   "responses": [
+    {
+     "headers": {
+      "x-total-count": "2"
+     },
+     "body": [
+      {
+       "id": "IE2",
+       "section": {
+        "id": "S2"
+       },
+       "recurrence": {
+        "timePeriod": {
+         "startOn": "2026-08-04T11:00:00Z",
+         "endOn": "2026-08-04T12:40:00Z"
+        },
+        "repeatRule": {
+         "type": "weekly",
+         "daysOfWeek": [
+          "tuesday"
+         ]
+        }
+       },
+       "locations": [
+        {
+         "location": {
+          "type": "room",
+          "room": {
+           "id": "ROOM-GUID-2"
+          }
+         }
+        }
+       ]
+      },
+      {
+       "id": "IE3",
+       "section": {
+        "id": "S2"
+       },
+       "recurrence": {
+        "timePeriod": {
+         "startOn": "2026-08-05T11:00:00Z",
+         "endOn": "2026-08-05T12:40:00Z"
+        },
+        "repeatRule": {
+         "type": "daily"
+        }
+       },
+       "locations": []
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/api/instructional-events",
+   "query": {
+    "criteria": "{\"section\":{\"id\":\"S3\"}}"
+   },
+   "responses": [
+    {
+     "status": 503,
+     "body": {
+      "errors": [
+       {
+        "code": "Global.Internal.Error"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "path": "/api/section-instructors",
+   "query": {
+    "criteria": "{\"section\":{\"id\":\"S1\"}}"
+   },
+   "responses": [
+    {
+     "headers": {
+      "x-total-count": "2"
+     },
+     "body": [
+      {
+       "instructor": {
+        "id": "PER-P2"
+       },
+       "instructorRole": "secondary"
+      },
+      {
+       "instructor": {
+        "id": "PER-P1"
+       },
+       "instructorRole": "primary"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/api/section-instructors",
+   "query": {
+    "criteria": "{\"section\":{\"id\":\"S2\"}}"
+   },
+   "responses": [
+    {
+     "headers": {
+      "x-total-count": "1"
+     },
+     "body": [
+      {
+       "instructor": {
+        "id": "PER-P1"
+       },
+       "instructorRole": "primary"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/api/section-instructors",
+   "query": {
+    "criteria": "{\"section\":{\"id\":\"S3\"}}"
+   },
+   "responses": [
+    {
+     "headers": {
+      "x-total-count": "0"
+     },
+     "body": []
+    }
+   ]
+  },
+  {
+   "path": "/api/rooms/ROOM-GUID-2",
+   "responses": [
+    {
+     "body": {
+      "id": "ROOM-GUID-2",
+      "number": "B202"
+     }
+    }
+   ]
+  },
+  {
+   "path": "/api/persons/PER-P1",
+   "responses": [
+    {
+     "body": {
+      "id": "PER-P1",
+      "names": [
+       {
+        "preference": "preferred",
+        "fullName": "Ana Souza"
+       }
+      ],
+      "emails": [
+       {
+        "preference": "primary",
+        "address": "Ana.Souza@uni.example"
+       }
+      ],
+      "credentials": [
+       {
+        "type": "bannerId",
+        "value": "B0001"
+       },
+       {
+        "type": "colleaguePersonId",
+        "value": "0000001"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "path": "/api/persons/PER-P2",
+   "responses": [
+    {
+     "body": {
+      "id": "PER-P2",
+      "names": [
+       {
+        "preference": "preferred",
+        "fullName": "Carlos Lima"
+       }
+      ],
+      "emails": [
+       {
+        "preference": "primary",
+        "address": "carlos@uni.example"
+       }
+      ],
+      "credentials": [
+       {
+        "type": "bannerId",
+        "value": "B0002"
+       },
+       {
+        "type": "colleaguePersonId",
+        "value": "0000002"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "path": "/api/persons/PER-S1",
+   "responses": [
+    {
+     "body": {
+      "id": "PER-S1",
+      "names": [
+       {
+        "preference": "preferred",
+        "fullName": "Bruno Lima"
+       }
+      ],
+      "emails": [
+       {
+        "preference": "primary",
+        "address": "bruno@uni.example"
+       }
+      ],
+      "credentials": [
+       {
+        "type": "bannerId",
+        "value": "B1001"
+       },
+       {
+        "type": "colleaguePersonId",
+        "value": "0001001"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "path": "/api/persons/PER-S2",
+   "responses": [
+    {
+     "body": {
+      "id": "PER-S2",
+      "names": [
+       {
+        "preference": "preferred",
+        "fullName": "Carla Dias"
+       }
+      ],
+      "emails": [
+       {
+        "preference": "primary",
+        "address": "carla@uni.example"
+       }
+      ],
+      "credentials": [
+       {
+        "type": "bannerId",
+        "value": "B1002"
+       },
+       {
+        "type": "colleaguePersonId",
+        "value": "0001002"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "path": "/api/persons/PER-GONE",
+   "responses": [
+    {
+     "status": 404,
+     "body": {
+      "errors": [
+       {
+        "code": "Global.NotFound"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "path": "/api/section-registrations",
+   "query": {
+    "criteria": "{\"section\":{\"id\":\"S1\"}}"
+   },
+   "responses": [
+    {
+     "headers": {
+      "x-total-count": "3"
+     },
+     "body": [
+      {
+       "registrant": {
+        "id": "PER-S1"
+       },
+       "section": {
+        "id": "S1"
+       },
+       "status": {
+        "registrationStatus": "registered",
+        "sectionRegistrationStatusReason": "registered"
+       }
+      },
+      {
+       "registrant": {
+        "id": "PER-S2"
+       },
+       "section": {
+        "id": "S1"
+       },
+       "status": {
+        "registrationStatus": "notRegistered",
+        "sectionRegistrationStatusReason": "withdrawn"
+       }
+      },
+      {
+       "registrant": {
+        "id": "PER-GONE"
+       },
+       "section": {
+        "id": "S1"
+       },
+       "status": {
+        "registrationStatus": "registered"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/api/section-registrations",
+   "query": {
+    "criteria": "{\"section\":{\"id\":\"S2\"}}"
+   },
+   "responses": [
+    {
+     "headers": {
+      "x-total-count": "1"
+     },
+     "body": [
+      {
+       "registrant": {
+        "id": "PER-S1"
+       },
+       "section": {
+        "id": "S2"
+       },
+       "status": {
+        "registrationStatus": "registered"
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

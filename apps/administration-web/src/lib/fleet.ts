@@ -61,17 +61,60 @@ export type ApiResult<T> =
   | { ok: true; data: T; fetchedAt: string }
   | { ok: false; error: string; status?: number; fetchedAt: string };
 
+/**
+ * Wire shape of device-management heartbeat metrics (`HeartbeatMetrics` in
+ * services/device-management/src/domain.ts).
+ */
+export interface WireMetrics {
+  firmwareVersion?: string;
+  uptimeSeconds?: number;
+  cpuTempC?: number;
+  diskFreeBytes?: number;
+  diskTotalBytes?: number;
+  bufferQueueCount?: number;
+  bufferQueueBytes?: number;
+  isRecording?: boolean;
+  currentScheduledClassId?: string;
+  evictedRecordings?: number;
+  clockSkewMs?: number;
+  lastError?: string;
+  [key: string]: unknown;
+}
+
+/** Maps device-management metric names to the dashboard's names. */
+export function normalizeMetrics(m: WireMetrics | null | undefined): HeartbeatMetrics | null {
+  if (!m) return null;
+  const { cpuTempC, bufferQueueCount, bufferQueueBytes, ...rest } = m;
+  return {
+    ...rest,
+    cpuTemperatureC: cpuTempC ?? null,
+    queuedRecordings: bufferQueueCount ?? null,
+    queuedBytes: bufferQueueBytes ?? null,
+  };
+}
+
+interface WireHealthRow extends Omit<FleetDevice, 'metrics'> {
+  metrics: WireMetrics | null;
+}
+
+const normalizeRow = (row: WireHealthRow): FleetDevice => ({
+  ...row,
+  metrics: normalizeMetrics(row.metrics),
+});
+
 export const deviceManagementUrl = (): string =>
   (process.env.DEVICE_MANAGEMENT_URL ?? 'http://localhost:4004').replace(/\/$/, '');
+
+export const institutionScope = (): string =>
+  process.env.ADMIN_INSTITUTION_ID ?? '00000000-0000-4000-8000-0000000000aa';
 
 async function getJson<T>(path: string): Promise<ApiResult<T>> {
   const fetchedAt = new Date().toISOString();
   const url = `${deviceManagementUrl()}${path}`;
   try {
     const headers: Record<string, string> = { accept: 'application/json' };
-    if (process.env.DEVICE_MANAGEMENT_TOKEN) {
-      headers.authorization = `Bearer ${process.env.DEVICE_MANAGEMENT_TOKEN}`;
-    }
+    const token = process.env.ADMIN_API_TOKEN ?? process.env.DEVICE_MANAGEMENT_TOKEN;
+    if (token) headers.authorization = `Bearer ${token}`;
     const res = await fetch(url, { cache: 'no-store', headers, signal: AbortSignal.timeout(8000) });
     if (!res.ok) {
       return {
@@ -92,7 +135,26 @@ async function getJson<T>(path: string): Promise<ApiResult<T>> {
   }
 }
 
-export const getFleetHealth = (): Promise<ApiResult<FleetHealth>> => getJson('/v1/fleet/health');
+export async function getFleetHealth(): Promise<ApiResult<FleetHealth>> {
+  const res = await getJson<{ summary: FleetHealth['summary']; devices: WireHealthRow[] }>(
+    `/v1/fleet/health?institutionId=${encodeURIComponent(institutionScope())}`,
+  );
+  if (!res.ok) return res;
+  return { ...res, data: { summary: res.data.summary, devices: res.data.devices.map(normalizeRow) } };
+}
 
-export const getDeviceHealth = (deviceId: string): Promise<ApiResult<DeviceHealth>> =>
-  getJson(`/v1/devices/${encodeURIComponent(deviceId)}/health`);
+/** device-management returns the health row flattened, with `heartbeats` alongside. */
+export async function getDeviceHealth(deviceId: string): Promise<ApiResult<DeviceHealth>> {
+  const res = await getJson<WireHealthRow & { heartbeats: (WireMetrics & { receivedAt: string })[] }>(
+    `/v1/devices/${encodeURIComponent(deviceId)}/health`,
+  );
+  if (!res.ok) return res;
+  const { heartbeats, ...row } = res.data;
+  return {
+    ...res,
+    data: {
+      device: normalizeRow(row),
+      heartbeats: heartbeats.map((h) => ({ ...normalizeMetrics(h), receivedAt: h.receivedAt })),
+    },
+  };
+}

@@ -250,3 +250,51 @@ jobs:
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: 'trivy-results.sarif'
+
+  # 10. End-to-end scenario (all services as local processes, fake providers, Postgres)
+  e2e:
+    name: End-to-end scenario
+    runs-on: ubuntu-latest
+    needs: [build-ts]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm turbo run build --filter='./services/*' --filter=@ci/dev-event-bus
+      - name: Python services into one venv
+        run: |
+          python -m venv .venv
+          for d in audio-ingestion audio-processing transcription speaker-diarization ai-gateway lecture-intelligence event-extraction; do
+            .venv/bin/pip install -e "services/$d"
+          done
+          .venv/bin/pip install "psycopg[binary]>=3.2" httpx numpy cryptography uvicorn
+      - name: Run scenario
+        env:
+          PGPASSWORD: ci
+        run: .venv/bin/python tests/e2e/run_e2e.py --local --database "postgresql://ci:ci@localhost:5432/postgres"
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-report
+          path: tests/e2e/results/
