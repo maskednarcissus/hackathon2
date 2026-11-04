@@ -1,14 +1,89 @@
-﻿# Identity Service
+# Identity Service
 
-## Responsibilities
+Authentication, token issuance and enrollment-based authorization (Phase 3 · deliverable 3.1).
+Contract: [`docs/architecture/phase-3-student-experience.md` §2](../../docs/architecture/phase-3-student-experience.md).
 
-- Authentication and MFA
-- JWT issuance and validation
-- SSO integration (SAML, OIDC)
-- Session management
-- Password reset flows
-- Role assignment
+TypeScript · Fastify · node:crypto (scrypt, Ed25519, RSA) · zod — port **4001**.
 
-## Technology
+## Endpoints
 
-TypeScript · Fastify · PostgreSQL · Redis
+| Method | Path                                    | Auth                     | Purpose                                                                                      |
+| ------ | --------------------------------------- | ------------------------ | -------------------------------------------------------------------------------------------- |
+| GET    | `/health`                               | —                        | Liveness                                                                                     |
+| GET    | `/.well-known/jwks.json`                | —                        | Public Ed25519 keys (OKP JWKs with `kid`)                                                    |
+| POST   | `/v1/auth/login`                        | —                        | `{email, password, institutionId}` → `{accessToken, refreshToken, expiresIn, user}`          |
+| POST   | `/v1/auth/refresh`                      | —                        | `{refreshToken}` → new pair (rotation)                                                       |
+| POST   | `/v1/auth/logout`                       | optional bearer          | `{refreshToken}` → revokes the family and the presented access token (`204`)                 |
+| GET    | `/v1/me`                                | bearer                   | Current user                                                                                 |
+| GET    | `/v1/me/sections`                       | bearer                   | `{role, institutionId, classSectionIds}` the caller may read                                 |
+| POST   | `/v1/authorize`                         | internal token or bearer | `{subject, action:"read", resource:{type, classSectionId}}` → `{allowed, reason}`            |
+| POST   | `/v1/users`                             | admin bearer             | Create a user in the admin's institution (optional password, `studentId`/`professorId` link) |
+| POST   | `/v1/sync/sections`                     | internal token or admin  | Mirror of class sections + teaching professor                                                |
+| POST   | `/v1/sync/enrollments`                  | internal token or admin  | Mirror of enrollments; `mode: "replace"` withdraws missing ones per section                  |
+| PUT    | `/v1/identity-providers/:institutionId` | admin bearer             | Configure OIDC SSO for the institution                                                       |
+| GET    | `/v1/auth/oidc/:institutionId/start`    | —                        | `302` to the IdP (`?format=json` returns `{authorizationUrl}`)                               |
+| GET    | `/v1/auth/oidc/:institutionId/callback` | —                        | Completes the code flow → same response as login                                             |
+
+Errors are always `{ "error": { "code", "message", "details?" } }`.
+
+## Security model
+
+- **Passwords** — scrypt `N=2^15, r=8, p=1`, 16-byte salt, stored as `scrypt$N$r$p$salt$hash`.
+  Unknown users are checked against a dummy hash so timing does not reveal accounts; the error is the same
+  generic `invalid_credentials`. 5 consecutive failures lock the credential for 15 minutes (`423` + `Retry-After`).
+- **Access tokens** — JWT `EdDSA` (Ed25519), 15 min, claims `iss, sub, aud, iat, exp, jti, inst, role, pid`.
+  The verifier pins the algorithm list (no `alg: none`, no HS256/RS256 confusion) and checks that the key type
+  matches the algorithm. Logout adds the token `jti` to a denylist consulted by this service.
+- **Refresh tokens** — opaque `rt_…` (256 bits), 30 days, only SHA-256 stored, rotated on every use. Presenting
+  an already-rotated token revokes the whole family (`auth.refresh_reuse_detected`).
+- **OIDC** — authorization code + PKCE S256, single-use `state` (10 min), `nonce`, RS256 `id_token` verified
+  against the IdP JWKS (`iss`, `aud`, `azp`, `exp` with 60 s skew), `email_verified` must not be `false`.
+  Users are linked by email **within the institution**; there is no just-in-time account creation.
+- **Authorization** — students: active enrollment; professors: sections they teach; coordinators/admins:
+  their institution. Cross-institution access is denied first, for every role. A bearer caller may only query
+  itself unless it is staff of the subject's institution. Sync endpoints never move a section across tenants.
+- **Audit** — `auth.login_succeeded`, `auth.login_failed`, `auth.locked`, `auth.refresh_reuse_detected`,
+  `auth.logout`, `auth.user_created` are POSTed to the audit service (failures are logged, never fatal).
+  Passwords and tokens are never logged or audited.
+
+## Using the verifier in other services
+
+`src/jwt-verify.ts` is self-contained (node:crypto, zod, fastify types):
+
+```ts
+import { createJwksAccessTokenVerifier, requireAuth } from './jwt-verify.js';
+
+const verify = createJwksAccessTokenVerifier({ jwksUrl: `${IDENTITY_URL}/.well-known/jwks.json` });
+app.get(
+  '/v1/lectures/:id',
+  { preHandler: requireAuth(verify, { roles: ['student', 'professor'] }) },
+  handler,
+);
+// request.auth → { sub, inst, role, pid, ... }
+```
+
+The JWKS is cached for 5 minutes and refetched (at most every 30 s) when an unknown `kid` appears, so key
+rotation works by publishing the new key while keeping the old one in `IDENTITY_PREVIOUS_PUBLIC_KEYS_PEM`.
+
+## Configuration
+
+| Env                                                                                  | Default       | Notes                                                                          |
+| ------------------------------------------------------------------------------------ | ------------- | ------------------------------------------------------------------------------ |
+| `PORT`                                                                               | `4001`        |                                                                                |
+| `IDENTITY_SIGNING_KEY_PEM`                                                           | —             | Ed25519 PKCS#8 PEM (Secret Manager). Unset → ephemeral dev key with a warning. |
+| `IDENTITY_PREVIOUS_PUBLIC_KEYS_PEM`                                                  | —             | Concatenated SPKI PEMs still accepted during rotation                          |
+| `IDENTITY_ISSUER`                                                                    | `ci-identity` |                                                                                |
+| `IDENTITY_INTERNAL_TOKEN`                                                            | —             | Shared secret for `X-Internal-Token` service calls (sync, authorize)           |
+| `AUDIT_SERVICE_URL`                                                                  | —             | e.g. `http://localhost:4011`; unset → in-memory audit                          |
+| `IDENTITY_BOOTSTRAP_ADMIN_EMAIL` / `_PASSWORD` / `IDENTITY_BOOTSTRAP_INSTITUTION_ID` | —             | Creates a first admin at start-up                                              |
+
+## Development
+
+```bash
+pnpm --filter @ci/identity-service test       # 61 tests (vitest + app.inject)
+pnpm --filter @ci/identity-service dev
+```
+
+Repositories are interfaces with in-memory implementations (`src/repositories.ts`); a PostgreSQL adapter is
+the next step (tables: `users`, `user_credentials`, `refresh_tokens`, `revoked_access_tokens`,
+`identity_provider_configs`, `oidc_auth_states`, `access_section_mirror`, `access_enrollment_mirror`).
