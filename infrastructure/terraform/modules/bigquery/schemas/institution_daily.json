@@ -1,0 +1,132 @@
+[
+  {
+    "name": "holding_company_id",
+    "type": "STRING",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "institution_id",
+    "type": "STRING",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "date",
+    "type": "DATE",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "classes_scheduled",
+    "type": "INTEGER",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "classes_captured",
+    "type": "INTEGER",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "classes_transcribed",
+    "type": "INTEGER",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "classes_structured",
+    "type": "INTEGER",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "events_extracted",
+    "type": "INTEGER",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "events_reviewed",
+    "type": "INTEGER",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "professors_teaching",
+    "type": "INTEGER",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "active_professors",
+    "type": "INTEGER",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "active_students",
+    "type": "INTEGER",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "assistant_questions",
+    "type": "INTEGER",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "searches",
+    "type": "INTEGER",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "devices_total",
+    "type": "INTEGER",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "devices_online",
+    "type": "INTEGER",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "device_uptime_pct",
+    "type": "FLOAT",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "firmware_current_pct",
+    "type": "FLOAT",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "incidents_opened",
+    "type": "INTEGER",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "incidents_resolved",
+    "type": "INTEGER",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "mttr_minutes",
+    "type": "FLOAT",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "ai_cost_usd",
+    "type": "NUMERIC",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "stt_cost_usd",
+    "type": "NUMERIC",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "storage_cost_usd",
+    "type": "NUMERIC",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "infra_cost_usd",
+    "type": "NUMERIC",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "built_at",
+    "type": "TIMESTAMP",
+    "mode": "REQUIRED"
+  }
+]

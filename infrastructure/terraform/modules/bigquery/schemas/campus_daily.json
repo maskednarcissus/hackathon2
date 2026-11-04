@@ -1,0 +1,62 @@
+[
+  {
+    "name": "holding_company_id",
+    "type": "STRING",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "institution_id",
+    "type": "STRING",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "campus_id",
+    "type": "STRING",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "date",
+    "type": "DATE",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "classes_scheduled",
+    "type": "INTEGER",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "classes_captured",
+    "type": "INTEGER",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "devices_total",
+    "type": "INTEGER",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "devices_online",
+    "type": "INTEGER",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "stt_cost_usd",
+    "type": "NUMERIC",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "storage_cost_usd",
+    "type": "NUMERIC",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "hardware_cost_usd",
+    "type": "NUMERIC",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "built_at",
+    "type": "TIMESTAMP",
+    "mode": "REQUIRED"
+  }
+]

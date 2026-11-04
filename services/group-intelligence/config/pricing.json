@@ -1,0 +1,11 @@
+{
+  "asOf": "2026-11-04",
+  "currency": "USD",
+  "sttUsdPerMinute": 0.016,
+  "assumedMinutesPerClass": 90,
+  "audioGbPerMinute": 0.00192,
+  "storageUsdPerGbMonth": 0.023,
+  "audioRetentionMonths": 3,
+  "deviceUnitCostUsd": 450,
+  "deviceAmortisationMonths": 36
+}

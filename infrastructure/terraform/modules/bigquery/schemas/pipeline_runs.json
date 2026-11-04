@@ -1,0 +1,38 @@
+[
+  {
+    "name": "id",
+    "type": "STRING",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "date",
+    "type": "DATE",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "status",
+    "type": "STRING",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "started_at",
+    "type": "TIMESTAMP",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "finished_at",
+    "type": "TIMESTAMP",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "institutions",
+    "type": "INTEGER",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "details",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "JSON: holdingCompanyIds, errors"
+  }
+]
