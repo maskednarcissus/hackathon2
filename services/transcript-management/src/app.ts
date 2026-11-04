@@ -17,8 +17,15 @@ import {
   type TranscriptSegment,
 } from './domain.js';
 import { HttpError, installErrorHandler } from './errors.js';
+import {
+  extractBearerToken,
+  type AccessTokenClaims,
+  type AccessTokenVerifier,
+} from './jwt-verify.js';
+import { requireInternalToken } from './platform/internal-auth.js';
+import { PG, pgCode } from './platform/pg.js';
 import { envelope, InMemoryEventPublisher, type EventPublisher } from './events.js';
-import { VersionConflictError, type TranscriptRepository } from './repository.js';
+import { VersionConflictError, type TranscriptRepository, type VectorStore } from './repository.js';
 import {
   ActorHeadersSchema,
   CorrectionSchema,
@@ -49,7 +56,17 @@ export interface TranscriptDeps {
   logger?: boolean;
   /** Max request body in bytes (90-minute lectures with word timings are large). */
   bodyLimit?: number;
+  /** Persisted search vectors (Postgres `segment_embeddings`). */
+  vectorStore?: VectorStore;
+  /** Rebuild the in-memory search index from the repository when the server starts. */
+  warmSearchIndex?: boolean;
+  /** INTERNAL_API_TOKEN: required as x-internal-token on /internal/* when set. */
+  internalToken?: string;
+  /** Identity access-token verifier; when set, student searches emit `lecture.searched`. */
+  verifier?: AccessTokenVerifier;
 }
+
+const MAX_ENGAGEMENT_SECTIONS = 20;
 
 const IdParams = z.object({ id: z.string().uuid() });
 const SegmentParams = z.object({
@@ -97,7 +114,14 @@ export function buildApp(deps: TranscriptDeps): FastifyInstance {
       return transcript && segment ? { transcript, segment } : null;
     },
     (msg, err) => app.log.warn({ err }, msg),
+    deps.vectorStore,
   );
+  if (deps.warmSearchIndex) {
+    app.addHook('onReady', async () => {
+      const size = await search.rebuild(await repo.indexable());
+      app.log.info({ indexedSegments: size }, 'search index rebuilt');
+    });
+  }
 
   async function load(id: string): Promise<Transcript> {
     const t = await repo.findById(id);
@@ -206,6 +230,8 @@ export function buildApp(deps: TranscriptDeps): FastifyInstance {
       model: input.model,
       processingStatus: 'complete',
       speakerCount: null,
+      diarizationMethod: null,
+      diarizationVersion: null,
       createdAt: now,
       updatedAt: now,
     };
@@ -234,7 +260,25 @@ export function buildApp(deps: TranscriptDeps): FastifyInstance {
       };
     });
     if (labels.size > 0) transcript.speakerCount = labels.size;
-    await repo.create(transcript, segments);
+    try {
+      await repo.create(transcript, segments);
+    } catch (err) {
+      if (pgCode(err) === PG.foreignKeyViolation) {
+        throw new HttpError(
+          422,
+          'unknown_reference',
+          'recordingSessionId, scheduledClassId, classSectionId or institutionId does not exist',
+        );
+      }
+      if (pgCode(err) === PG.uniqueViolation) {
+        throw new HttpError(
+          409,
+          'transcript_exists',
+          'A transcript for this recording and processing version already exists',
+        );
+      }
+      throw err;
+    }
     // The newest processing version of a recording replaces older ones in the search index.
     await search.indexTranscript(
       transcript,
@@ -309,6 +353,9 @@ export function buildApp(deps: TranscriptDeps): FastifyInstance {
       input.speakerCount,
       new Map(input.assignments.map((a) => [a.segmentIndex, a.speakerLabel])),
       clock.now().toISOString(),
+      input.method !== undefined || input.processingVersion !== undefined
+        ? { method: input.method ?? null, version: input.processingVersion ?? null }
+        : undefined,
     );
     return withStats(await load(id));
   });
@@ -450,13 +497,121 @@ export function buildApp(deps: TranscriptDeps): FastifyInstance {
 
   app.get('/v1/search', async (req) => {
     const q = SearchQuerySchema.parse(req.query);
+    const claims = await optionalClaims(req.headers.authorization);
+    let response;
     try {
-      return await search.search(q.q, q.classSectionIds, q.limit, q.mode);
+      response = await search.search(q.q, q.classSectionIds, q.limit, q.mode);
     } catch (err) {
       if (err instanceof EmbeddingUnavailableError)
         throw new HttpError(502, 'embeddings_unavailable', err.message);
       throw err;
     }
+    if (claims?.role === 'student') {
+      // Engagement (integration-stage §5): one event per searched section; the query text is not stored.
+      for (const classSectionId of q.classSectionIds.slice(0, MAX_ENGAGEMENT_SECTIONS)) {
+        await audit.record({
+          tenantId: claims.inst,
+          actorId: claims.pid ?? claims.sub,
+          actorType: 'student',
+          action: 'lecture.searched',
+          resourceType: 'class_section',
+          resourceId: classSectionId,
+          metadata: {
+            classSectionId,
+            mode: q.mode,
+            resultCount: response.results.filter((r) => r.classSectionId === classSectionId).length,
+          },
+        });
+      }
+    }
+    return response;
+  });
+
+  async function optionalClaims(header: string | undefined): Promise<AccessTokenClaims | null> {
+    const token = extractBearerToken(header);
+    if (!token || !deps.verifier) return null;
+    try {
+      return await deps.verifier(token);
+    } catch {
+      throw new HttpError(401, 'invalid_token', 'Invalid or expired access token');
+    }
+  }
+
+  // ---- Governance data-owner endpoints (integration-stage §5) ----
+  const internal = { preHandler: requireInternalToken(deps.internalToken) };
+
+  app.get('/internal/v1/retention/candidates', internal, async (req) => {
+    const q = z
+      .object({
+        institutionId: z.string().uuid(),
+        olderThan: z.string().datetime({ offset: true }),
+        kind: z.string(),
+      })
+      .parse(req.query);
+    if (q.kind !== 'transcript')
+      throw new HttpError(
+        400,
+        'unsupported_kind',
+        `transcript-management owns kind "transcript" only`,
+      );
+    return {
+      candidates: await repo.retentionCandidates(
+        q.institutionId,
+        new Date(q.olderThan).toISOString(),
+      ),
+    };
+  });
+
+  app.post('/internal/v1/retention/delete', internal, async (req) => {
+    const body = z
+      .object({
+        ids: z.array(z.string().uuid()).max(10_000),
+        kind: z.literal('transcript'),
+        jobId: z.string().min(1).max(100),
+      })
+      .parse(req.body);
+    const deletedIds = await repo.deleteTranscripts(body.ids);
+    search.removeTranscripts(deletedIds);
+    app.log.info({ jobId: body.jobId, deleted: deletedIds.length }, 'retention deletion');
+    return { deletedIds };
+  });
+
+  app.post('/internal/v1/dsr/:type', internal, async (req) => {
+    const { type } = z
+      .object({
+        type: z.enum(['access', 'correction', 'deletion', 'anonymization', 'restriction']),
+      })
+      .parse(req.params);
+    const p = z
+      .object({
+        subjectType: z.enum(['student', 'professor']),
+        subjectId: z.string().uuid(),
+        requestId: z.string().uuid(),
+        institutionId: z.string().uuid(),
+      })
+      .parse(req.body);
+    const service = 'transcript-management';
+    if (p.subjectType !== 'professor') {
+      return {
+        service,
+        status: 'not_applicable',
+        items: { reason: 'No personal data of students is stored' },
+      };
+    }
+    if (type === 'access') {
+      const corrections = await repo.correctionsByAuthor(p.subjectId);
+      return { service, status: 'completed', items: { corrections } };
+    }
+    if (type === 'deletion' || type === 'anonymization') {
+      // Lecture content stays; only the authorship of corrections is anonymised.
+      const anonymised = await repo.anonymiseCorrectionAuthor(p.subjectId);
+      return { service, status: 'completed', items: { correctionsAnonymised: anonymised } };
+    }
+    return {
+      service,
+      status: 'not_applicable',
+      items: { reason: `${type} is not supported for corrections` },
+    };
   });
 
   return app;

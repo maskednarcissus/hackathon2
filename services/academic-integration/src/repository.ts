@@ -31,6 +31,7 @@ export interface ChangeSet {
 }
 
 export interface ScheduledClassQuery {
+  institutionId?: string;
   classroomId?: string;
   classSectionId?: string;
   /** Classes ending after `from`. */
@@ -123,6 +124,7 @@ export class InMemoryAcademicRepository implements AcademicRepository {
       [...this.scheduled.values()]
         .filter(
           (s) =>
+            (q.institutionId === undefined || s.institutionId === q.institutionId) &&
             (q.classroomId === undefined || s.classroomId === q.classroomId) &&
             (q.classSectionId === undefined || s.classSectionId === q.classSectionId) &&
             (q.from === undefined || s.endsAt > q.from) &&
@@ -152,5 +154,19 @@ export class InMemoryAcademicRepository implements AcademicRepository {
     return Promise.resolve(
       [...this.enrollments.values()].filter((e) => e.classSectionId === classSectionId),
     );
+  }
+}
+
+/** A foreign key the import cannot satisfy (e.g. a classroom that organization does not know). */
+export class MissingReferenceError extends Error {
+  constructor(readonly constraint: string | undefined) {
+    super(`Referenced entity does not exist (${constraint ?? 'foreign key'})`);
+  }
+}
+
+/** A unique constraint the import violates (e.g. two external ids with the same e-mail). */
+export class DuplicateDataError extends Error {
+  constructor(readonly constraint: string | undefined) {
+    super(`Import conflicts with existing data (${constraint ?? 'unique constraint'})`);
   }
 }

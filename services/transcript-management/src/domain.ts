@@ -63,6 +63,9 @@ export interface Transcript {
   model: string;
   processingStatus: 'complete';
   speakerCount: number | null;
+  /** Diarization provenance: `provider_tags` | `acoustic_clustering`, and the diarizer version. */
+  diarizationMethod: string | null;
+  diarizationVersion: string | null;
   createdAt: string;
   updatedAt: string;
 }

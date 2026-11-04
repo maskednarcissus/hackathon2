@@ -1,4 +1,4 @@
-import { timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import type { FastifyRequest } from 'fastify';
 import { HttpError } from './errors.js';
 import { extractBearerToken, JwtError, type AccessTokenVerifier, type Role } from './jwt-verify.js';
@@ -19,9 +19,8 @@ export interface AuthConfig {
 const ANALYTICS_ROLES: readonly Role[] = ['coordinator', 'admin'];
 
 function sameSecret(a: string, b: string): boolean {
-  const x = Buffer.from(a);
-  const y = Buffer.from(b);
-  return x.length === y.length && timingSafeEqual(x, y);
+  const digest = (v: string): Buffer => createHash('sha256').update(v).digest();
+  return timingSafeEqual(digest(a), digest(b));
 }
 
 export class Authenticator {
@@ -29,6 +28,13 @@ export class Authenticator {
 
   async principal(req: FastifyRequest): Promise<Principal> {
     if (this.config.disabled) return { kind: 'dev' };
+    // Service-to-service (integration-stage §4): x-internal-token, constant-time.
+    const header = req.headers['x-internal-token'];
+    if (typeof header === 'string' && header.length > 0) {
+      if (this.config.internalToken && sameSecret(header, this.config.internalToken))
+        return { kind: 'internal' };
+      throw new HttpError(401, 'internal_token_required', 'Invalid x-internal-token');
+    }
     const token = extractBearerToken(req.headers.authorization);
     if (!token) throw new HttpError(401, 'unauthorized', 'Bearer token required');
     if (this.config.internalToken && sameSecret(token, this.config.internalToken))

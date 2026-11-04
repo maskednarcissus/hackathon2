@@ -33,10 +33,9 @@ export function installErrorHandler(app: FastifyInstance): void {
     }
     const e = err as { statusCode?: number; message?: string };
     if (typeof e.statusCode === 'number' && e.statusCode >= 400 && e.statusCode < 500) {
-      return sendError(
-        reply,
-        new HttpError(e.statusCode, 'bad_request', e.message ?? 'Bad request'),
-      );
+      const code = (err as { code?: unknown }).code;
+      const appCode = typeof code === 'string' && !code.startsWith('FST_') ? code : 'bad_request';
+      return sendError(reply, new HttpError(e.statusCode, appCode, e.message ?? 'Bad request'));
     }
     app.log.error(err);
     return sendError(reply, new HttpError(500, 'internal_error', 'Internal server error'));

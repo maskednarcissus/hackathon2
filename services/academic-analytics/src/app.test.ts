@@ -5,6 +5,7 @@ import {
   coordinator,
   INST,
   internal,
+  internalBearer,
   OTHER_INST,
   PROF_A,
   PROF_B,
@@ -73,6 +74,16 @@ describe('auth', () => {
       (await app.inject({ method: 'POST', url: '/v1/sync/sections', headers: internal, payload }))
         .statusCode,
     ).toBe(200);
+    const bearer = {
+      method: 'POST' as const,
+      url: '/v1/sync/sections',
+      headers: internalBearer,
+      payload,
+    };
+    expect((await app.inject(bearer)).statusCode).toBe(200);
+    const wrong = await app.inject({ ...bearer, headers: { 'x-internal-token': 'nope' } });
+    expect(wrong.statusCode).toBe(401);
+    expect(wrong.json<{ error: { code: string } }>().error.code).toBe('internal_token_required');
 
     const dev = await setup({ authDisabled: true });
     expect(

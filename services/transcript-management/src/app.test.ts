@@ -175,4 +175,42 @@ describe('transcript-management', () => {
     expect(formatTimestamp(5_400_000)).toBe('01:30:00');
     expect(formatTimestamp(65_999)).toBe('00:01:05');
   });
+  it('records diarization provenance from speaker-diarization', async () => {
+    const app = setup();
+    const { id } = (
+      await app.inject({
+        method: 'POST',
+        url: '/v1/transcripts',
+        payload: body([segment(0), segment(1)]),
+      })
+    ).json<{ id: string }>();
+    expect((await app.inject({ url: `/v1/transcripts/${id}` })).json()).toMatchObject({
+      diarizationMethod: null,
+      diarizationVersion: null,
+    });
+    const res = await app.inject({
+      method: 'PUT',
+      url: `/v1/transcripts/${id}/speakers`,
+      payload: {
+        speakerCount: 1,
+        method: 'acoustic_clustering',
+        processingVersion: 'diar-1.2.0',
+        assignments: [{ segmentIndex: 0, speakerLabel: 'SPEAKER_1' }],
+      },
+    });
+    expect(res.json()).toMatchObject({
+      diarizationMethod: 'acoustic_clustering',
+      diarizationVersion: 'diar-1.2.0',
+    });
+    expect((await app.inject({ url: `/v1/transcripts/${id}` })).json()).toMatchObject({
+      diarizationMethod: 'acoustic_clustering',
+      diarizationVersion: 'diar-1.2.0',
+    });
+    const bad = await app.inject({
+      method: 'PUT',
+      url: `/v1/transcripts/${id}/speakers`,
+      payload: { speakerCount: 1, method: 'voodoo', assignments: [] },
+    });
+    expect(bad.statusCode).toBe(400);
+  });
 });

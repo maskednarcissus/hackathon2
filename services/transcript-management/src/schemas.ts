@@ -86,6 +86,8 @@ export type CreateTranscriptInput = z.infer<typeof CreateTranscriptSchema>;
 export const SpeakerAssignmentSchema = z
   .object({
     speakerCount: z.number().int().min(0).max(100),
+    method: z.enum(['provider_tags', 'acoustic_clustering']).optional(),
+    processingVersion: z.string().min(1).max(100).optional(),
     assignments: z
       .array(
         z.object({

@@ -12,7 +12,9 @@ import {
 import { InMemoryDirectory } from './directory.js';
 import { FakeEmbeddingClient, HttpEmbeddingClient } from './embeddings.js';
 import { createJwksAccessTokenVerifier } from './jwt-verify.js';
+import { createPool } from './platform/pg.js';
 import { InMemoryAnalyticsRepository } from './repository.js';
+import { PgAnalyticsRepository, PgDirectory } from './repository.pg.js';
 
 const env = process.env;
 const url = (name: string, fallback: string): { baseUrl: string } => ({
@@ -20,10 +22,12 @@ const url = (name: string, fallback: string): { baseUrl: string } => ({
 });
 const authDisabled = env['AUTH_DISABLED'] === 'true';
 const deviceToken = env['DEVICE_MANAGEMENT_ADMIN_TOKEN'];
+const pool = env['DATABASE_URL'] ? createPool(env['DATABASE_URL']) : null;
+const internalToken = env['INTERNAL_API_TOKEN'] ?? env['INTERNAL_TOKEN'];
 
 const app = buildApp({
-  repository: new InMemoryAnalyticsRepository(),
-  directory: new InMemoryDirectory(),
+  repository: pool ? new PgAnalyticsRepository(pool) : new InMemoryAnalyticsRepository(),
+  directory: pool ? new PgDirectory(pool) : new InMemoryDirectory(),
   upstreams: {
     academic: new HttpAcademicClient(url('ACADEMIC_INTEGRATION_URL', 'http://localhost:4003')),
     calendar: new HttpCalendarClient(url('CALENDAR_URL', 'http://localhost:4005')),
@@ -52,11 +56,15 @@ const app = buildApp({
             jwksUrl: env['IDENTITY_JWKS_URL'] ?? 'http://localhost:4001/.well-known/jwks.json',
           }),
         }),
-    ...(env['INTERNAL_TOKEN'] ? { internalToken: env['INTERNAL_TOKEN'] } : {}),
+    ...(internalToken ? { internalToken } : {}),
   },
   logger: true,
 });
 
+app.log.info({ storage: pool ? 'postgres' : 'memory' }, 'analytics storage');
+app.addHook('onClose', async () => {
+  await pool?.end();
+});
 if (authDisabled)
   app.log.warn('AUTH_DISABLED=true — analytics endpoints are unauthenticated (development only)');
 

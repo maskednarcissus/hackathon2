@@ -100,3 +100,134 @@ export class StaticOrganizationClient implements OrganizationClient {
     return Promise.resolve(this.policies.get(classroomId) ?? null);
   }
 }
+
+// ---------------------------------------------------------------- organization classrooms (sync §3)
+
+export interface ClassroomInfo {
+  classroomId: string;
+  institutionId: string;
+  campusId: string;
+  campusName: string | null;
+  name: string | null;
+}
+
+export interface ClassroomDirectory {
+  /** organization `GET /v1/classrooms?institutionId=` */
+  listClassrooms(institutionId: string): Promise<ClassroomInfo[]>;
+}
+
+export class HttpClassroomDirectory implements ClassroomDirectory {
+  constructor(
+    private readonly baseUrl: string,
+    private readonly timeoutMs = 5000,
+  ) {}
+
+  async listClassrooms(institutionId: string): Promise<ClassroomInfo[]> {
+    let res: Response;
+    try {
+      res = await fetch(
+        `${this.baseUrl}/v1/classrooms?institutionId=${encodeURIComponent(institutionId)}`,
+        {
+          signal: AbortSignal.timeout(this.timeoutMs),
+        },
+      );
+    } catch (err) {
+      throw new OrganizationUnavailableError(`organization service unreachable: ${String(err)}`);
+    }
+    if (!res.ok)
+      throw new OrganizationUnavailableError(`organization service returned ${res.status}`);
+    const body = (await res.json()) as {
+      items?: {
+        id: string;
+        institutionId: string;
+        campusId: string;
+        campusName?: string;
+        name?: string;
+      }[];
+    };
+    return (body.items ?? []).map((c) => ({
+      classroomId: c.id,
+      institutionId: c.institutionId,
+      campusId: c.campusId,
+      campusName: c.campusName ?? null,
+      name: c.name ?? null,
+    }));
+  }
+}
+
+export class StaticClassroomDirectory implements ClassroomDirectory {
+  constructor(public classrooms: ClassroomInfo[] = []) {}
+  listClassrooms(institutionId: string): Promise<ClassroomInfo[]> {
+    return Promise.resolve(this.classrooms.filter((c) => c.institutionId === institutionId));
+  }
+}
+
+// ---------------------------------------------------------------- device-management (alert context)
+
+export interface DeviceInfo {
+  id: string;
+  institutionId: string;
+  classroomId: string | null;
+  lastSeenAt: string | null;
+  status: string;
+  credentialStatus: string;
+}
+
+export class DeviceDirectoryUnavailableError extends Error {}
+
+export interface DeviceDirectory {
+  /** device-management `GET /v1/devices[?institutionId=]` (admin bearer token). */
+  listDevices(institutionId?: string): Promise<DeviceInfo[]>;
+}
+
+export class HttpDeviceDirectory implements DeviceDirectory {
+  constructor(
+    private readonly baseUrl: string,
+    private readonly adminToken: string | undefined,
+    private readonly timeoutMs = 5000,
+  ) {}
+
+  async listDevices(institutionId?: string): Promise<DeviceInfo[]> {
+    let res: Response;
+    try {
+      res = await fetch(
+        `${this.baseUrl}/v1/devices${institutionId ? `?institutionId=${encodeURIComponent(institutionId)}` : ''}`,
+        {
+          headers: this.adminToken ? { authorization: `Bearer ${this.adminToken}` } : {},
+          signal: AbortSignal.timeout(this.timeoutMs),
+        },
+      );
+    } catch (err) {
+      throw new DeviceDirectoryUnavailableError(`device-management unreachable: ${String(err)}`);
+    }
+    if (!res.ok)
+      throw new DeviceDirectoryUnavailableError(`device-management returned ${res.status}`);
+    const body = (await res.json()) as {
+      items?: {
+        id: string;
+        institutionId: string;
+        classroomId?: string | null;
+        lastSeenAt?: string | null;
+        status: string;
+        credentialStatus: string;
+      }[];
+    };
+    return (body.items ?? []).map((d) => ({
+      id: d.id,
+      institutionId: d.institutionId,
+      classroomId: d.classroomId ?? null,
+      lastSeenAt: d.lastSeenAt ?? null,
+      status: d.status,
+      credentialStatus: d.credentialStatus,
+    }));
+  }
+}
+
+export class StaticDeviceDirectory implements DeviceDirectory {
+  constructor(public devices: DeviceInfo[] = []) {}
+  listDevices(institutionId?: string): Promise<DeviceInfo[]> {
+    return Promise.resolve(
+      this.devices.filter((d) => institutionId === undefined || d.institutionId === institutionId),
+    );
+  }
+}

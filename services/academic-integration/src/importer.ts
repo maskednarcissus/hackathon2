@@ -29,8 +29,18 @@ export interface ImportPlan {
 
 const emptyCounts = (): EntityCounts => ({ created: 0, updated: 0, unchanged: 0 });
 
+/** Key-order independent JSON (entities loaded from Postgres and planned ones build keys differently). */
+function stable(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
+  if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, v]) => v !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stable(v)}`).join(',')}}`;
+}
+
 function sameExceptId<T extends { id: string }>(a: T, b: T): boolean {
-  return JSON.stringify({ ...a, id: null }) === JSON.stringify({ ...b, id: null });
+  return stable({ ...a, id: null }) === stable({ ...b, id: null });
 }
 
 /**

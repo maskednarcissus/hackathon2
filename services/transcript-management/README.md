@@ -69,3 +69,20 @@ Segment corrections with original text preserved (2.18/2.19), full-text search.
 ## Technology
 
 TypeScript · Fastify · Zod · PostgreSQL
+
+## Integration stage
+
+- `DATABASE_URL` → Postgres (`PgTranscriptRepository`, also the `VectorStore` on `segment_embeddings`). The search index
+  is rebuilt in memory at start-up from the latest transcript of each recording, reusing stored vectors.
+  Unknown recording/section/class ids → `422 unknown_reference`.
+- `EVENT_BUS_URL` → `transcript.corrected` is published to the event bus; `INTERNAL_API_TOKEN` guards `/internal/*`.
+- `IDENTITY_JWKS_URL` → bearer tokens on `GET /v1/search` are verified; student searches emit audit `lecture.searched`
+  (one event per searched section, `metadata.classSectionId`, no query text). Invalid tokens → `401`.
+- Retention (kind `transcript`): `GET /internal/v1/retention/candidates?institutionId&olderThan&kind=transcript` →
+  `{candidates: [{id, createdAt, recordingSessionId, classSectionId, subjectIds}]}`;
+  `POST /internal/v1/retention/delete {ids, kind, jobId}` → `{deletedIds}` (segments, corrections and embeddings cascade;
+  lecture summaries and extracted events keep their rows — `data/migrations/pending/transcript-management.sql`).
+- DSR: `POST /internal/v1/dsr/{type}` — professors: `access` returns their corrections, `deletion`/`anonymization`
+  replace the author with the anonymous id (lecture content unchanged); students → `not_applicable`.
+- `PUT /v1/transcripts/:id/speakers` accepts `method` (`provider_tags` | `acoustic_clustering`) and `processingVersion`,
+  stored as `diarizationMethod` / `diarizationVersion`.

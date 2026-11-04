@@ -48,7 +48,7 @@ const SyllabusSchema = z
           id: z.string().trim().min(1).max(100),
           title: z.string().trim().min(1).max(300),
           keywords: z.array(z.string().trim().min(1).max(100)).max(30).default([]),
-          plannedWeek: z.number().int().min(1).max(60).optional(),
+          plannedWeek: z.number().int().min(1).max(53).optional(),
         }),
       )
       .max(500),

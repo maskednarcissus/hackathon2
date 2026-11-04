@@ -94,3 +94,11 @@ verified against identity's JWKS (`IDENTITY_JWKS_URL`). Service-to-service calls
 ## Technology
 
 TypeScript · Fastify · Zod · PostgreSQL (snapshots) · BigQuery (Phase 5 export)
+
+## Integration stage
+
+- `DATABASE_URL` → Postgres (`PgAnalyticsRepository` on `syllabus_items` / `analytics_daily_snapshots` /
+  `analytics_class_facts`, `PgDirectory` on the mirror tables in `data/migrations/pending/academic-analytics.sql`).
+  Re-running a snapshot day replaces its facts.
+- `INTERNAL_API_TOKEN` (fallback `INTERNAL_TOKEN`) → accepted as `x-internal-token` (contract §4) or as a bearer token on
+  the sync feeds and `POST /v1/snapshots/run`; an invalid `x-internal-token` → `401 internal_token_required`.

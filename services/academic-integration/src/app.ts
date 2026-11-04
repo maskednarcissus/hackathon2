@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import {
+  type DeviceDirectory,
   OrganizationUnavailableError,
   type AuditClient,
   type OrganizationClient,
@@ -11,7 +12,14 @@ import type { ImportIssue, ImportReport, ScheduledClass } from './domain.js';
 import { HttpError, installErrorHandler } from './errors.js';
 import { IDENTIFICATION_TOLERANCE_MS, identifyClass, type Candidate } from './identification.js';
 import { planImport } from './importer.js';
-import type { AcademicRepository } from './repository.js';
+import { requireInternalToken } from './platform/internal-auth.js';
+import {
+  DuplicateDataError,
+  MissingReferenceError,
+  type AcademicRepository,
+} from './repository.js';
+import type { SyncService } from './sync.js';
+import { buildAlertContext } from './alert-context.js';
 import { ImportPayloadSchema, formatPath, type ImportPayloadInput } from './schemas.js';
 
 export interface Clock {
@@ -25,6 +33,12 @@ export interface AcademicDeps {
   clock?: Clock;
   idGenerator?: () => string;
   logger?: boolean;
+  /** Academic data push to identity / calendar / notifications / analytics (integration-stage §3). */
+  sync?: SyncService;
+  /** Assigned devices per classroom for the alert-context feed. */
+  devices?: DeviceDirectory;
+  /** INTERNAL_API_TOKEN: required as x-internal-token on /internal/* and sync routes when set. */
+  internalToken?: string;
 }
 
 const iso = z.string().datetime({ offset: true });
@@ -64,7 +78,25 @@ export function buildApp(deps: AcademicDeps): FastifyInstance {
   const clock = deps.clock ?? { now: () => new Date() };
   const newId = deps.idGenerator ?? randomUUID;
   const app = Fastify({ logger: deps.logger ?? false, bodyLimit: 32 * 1024 * 1024 });
-  installErrorHandler(app);
+  installErrorHandler(app, (err) => {
+    if (err instanceof MissingReferenceError) {
+      return new HttpError(
+        422,
+        'unknown_reference',
+        'The import references an entity that does not exist (e.g. a classroom unknown to organization)',
+        { constraint: err.constraint },
+      );
+    }
+    if (err instanceof DuplicateDataError) {
+      return new HttpError(409, 'conflicting_data', err.message, { constraint: err.constraint });
+    }
+    return null;
+  });
+  const internal = { preHandler: requireInternalToken(deps.internalToken) };
+  app.addHook('onClose', () => {
+    deps.sync?.stop();
+    return Promise.resolve();
+  });
   app.addContentTypeParser(
     ['text/csv', 'application/csv'],
     { parseAs: 'string' },
@@ -111,7 +143,13 @@ export function buildApp(deps: AcademicDeps): FastifyInstance {
     const payload = parsed.data;
     const plan = planImport(payload, await repo.snapshot(payload.institutionId), newId);
     const rejected = plan.errors.length > 0;
-    if (!rejected && !payload.dryRun) await repo.apply(plan.changes);
+    if (!rejected && !payload.dryRun) {
+      await repo.apply(plan.changes);
+      // Fire-and-forget: the import response never waits for downstream services.
+      deps.sync
+        ?.schedule(payload.institutionId)
+        .catch((err: unknown) => app.log.warn({ err }, 'sync push failed'));
+    }
     const report: ImportReport = {
       importId,
       institutionId: payload.institutionId,
@@ -342,6 +380,54 @@ export function buildApp(deps: AcademicDeps): FastifyInstance {
       to: to.toISOString(),
       windows,
     };
+  });
+
+  // ---- Sync push (integration-stage §3) ----
+  app.get('/v1/sync/status', internal, async () => {
+    if (deps.sync) await Promise.race([deps.sync.idle(), new Promise((r) => setTimeout(r, 50))]);
+    return { targets: deps.sync?.snapshot() ?? [] };
+  });
+
+  app.post('/v1/sync/push', internal, async (req) => {
+    const body = z
+      .object({
+        institutionId: z.string().uuid(),
+        targets: z.array(z.string().min(1)).max(20).optional(),
+      })
+      .parse(req.body);
+    if (!deps.sync || deps.sync.targets.length === 0) {
+      throw new HttpError(409, 'sync_not_configured', 'No SYNC_TARGETS are configured');
+    }
+    const unknown = (body.targets ?? []).filter(
+      (t) => !deps.sync?.targets.some((x) => x.name === t),
+    );
+    if (unknown.length > 0)
+      throw new HttpError(400, 'unknown_target', `Unknown sync targets: ${unknown.join(', ')}`);
+    const results = await deps.sync.schedule(body.institutionId, body.targets);
+    return { institutionId: body.institutionId, results, targets: deps.sync.snapshot() };
+  });
+
+  // ---- Alert context for notifications /v1/alerts/evaluate (integration-stage §6) ----
+  app.get('/internal/v1/alert-context', internal, async (req) => {
+    const q = z
+      .object({
+        institutionId: z.string().uuid().optional(),
+        at: iso.optional(),
+        lookbackMinutes: z.coerce.number().int().min(0).max(1440).default(240),
+        lookaheadMinutes: z.coerce.number().int().min(0).max(1440).default(60),
+      })
+      .parse(req.query);
+    return buildAlertContext(
+      {
+        ...(q.institutionId !== undefined ? { institutionId: q.institutionId } : {}),
+        at: q.at ? new Date(q.at) : clock.now(),
+        lookbackMinutes: q.lookbackMinutes,
+        lookaheadMinutes: q.lookaheadMinutes,
+      },
+      repo,
+      deps.organization,
+      deps.devices,
+    );
   });
 
   return app;

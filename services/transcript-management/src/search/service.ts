@@ -1,5 +1,6 @@
 import type { Transcript, TranscriptSegment } from '../domain.js';
 import { EmbeddingUnavailableError, type EmbeddingClient } from './embeddings.js';
+import type { VectorStore } from '../repository.js';
 import { SearchIndex, reciprocalRankFusion, type Hit } from './index.js';
 import { analyze, highlight } from './text.js';
 
@@ -46,7 +47,41 @@ export class SearchService {
     private readonly embeddings: EmbeddingClient,
     private readonly lookup: SegmentLookup,
     private readonly warn: (msg: string, err: unknown) => void = () => undefined,
+    /** Persisted vectors (segment_embeddings); avoids re-embedding on restart. */
+    private readonly vectors?: VectorStore,
   ) {}
+
+  /** Rebuilds the in-memory index from storage (service start-up with Postgres). */
+  async rebuild(
+    items: readonly { transcript: Transcript; segments: readonly TranscriptSegment[] }[],
+  ): Promise<number> {
+    for (const { transcript, segments } of items) await this.indexTranscript(transcript, segments);
+    return this.index.size;
+  }
+
+  removeTranscripts(ids: readonly string[]): void {
+    for (const id of ids) this.index.removeTranscript(id);
+  }
+
+  private async persist(
+    t: Transcript,
+    rows: { segment: TranscriptSegment; vector: number[] }[],
+  ): Promise<void> {
+    if (!this.vectors || !t.classSectionId || rows.length === 0) return;
+    const classSectionId = t.classSectionId;
+    try {
+      await this.vectors.save(
+        rows.map((r) => ({
+          segmentId: r.segment.id,
+          classSectionId,
+          model: this.embeddings.model,
+          vector: r.vector,
+        })),
+      );
+    } catch (err) {
+      this.warn('could not persist segment embeddings', err);
+    }
+  }
 
   /**
    * Indexes all segments of a transcript (latest text). Transcripts without a classSectionId are not
@@ -72,18 +107,38 @@ export class SearchService {
         s.text,
       );
     }
-    for (let i = 0; i < indexable.length; i += EMBED_BATCH) {
-      const batch = indexable.slice(i, i + EMBED_BATCH);
+    let stored = new Map<string, number[]>();
+    if (this.vectors) {
+      try {
+        stored = await this.vectors.load(
+          indexable.map((s) => s.id),
+          this.embeddings.model,
+        );
+      } catch (err) {
+        this.warn('could not load stored embeddings', err);
+      }
+    }
+    const missing = indexable.filter((s) => {
+      const v = stored.get(s.id);
+      if (v) this.index.setVector(keyOf(t.id, s.segmentIndex), v);
+      return !v;
+    });
+    for (let i = 0; i < missing.length; i += EMBED_BATCH) {
+      const batch = missing.slice(i, i + EMBED_BATCH);
       try {
         const vectors = await this.embeddings.embed(
           batch.map((s) => s.text),
           'search_index',
           t.institutionId ?? undefined,
         );
+        const fresh: { segment: TranscriptSegment; vector: number[] }[] = [];
         batch.forEach((s, j) => {
           const v = vectors[j];
-          if (v) this.index.setVector(keyOf(t.id, s.segmentIndex), v);
+          if (!v) return;
+          this.index.setVector(keyOf(t.id, s.segmentIndex), v);
+          fresh.push({ segment: s, vector: v });
         });
+        await this.persist(t, fresh);
       } catch (err) {
         this.warn('embedding batch failed; segments indexed lexically only', err);
       }
@@ -103,7 +158,10 @@ export class SearchService {
         'search_index',
         t.institutionId ?? undefined,
       );
-      if (v) this.index.setVector(key, v);
+      if (v) {
+        this.index.setVector(key, v);
+        await this.persist(t, [{ segment: s, vector: v }]);
+      }
     } catch (err) {
       this.warn('embedding failed for corrected segment; indexed lexically only', err);
     }

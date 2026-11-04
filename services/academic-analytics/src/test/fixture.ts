@@ -1,10 +1,10 @@
 import { generateKeyPairSync, sign } from 'node:crypto';
 import { buildApp } from '../app.js';
 import type { ExtractedEvent, ScheduledClass } from '../clients.js';
-import { InMemoryDirectory } from '../directory.js';
+import { InMemoryDirectory, type Directory } from '../directory.js';
 import { FakeUpstreams } from '../fakes.js';
 import { createAccessTokenVerifier } from '../jwt-verify.js';
-import { InMemoryAnalyticsRepository } from '../repository.js';
+import { InMemoryAnalyticsRepository, type AnalyticsRepository } from '../repository.js';
 
 export const INST = '11111111-1111-4111-8111-111111111111';
 export const OTHER_INST = '22222222-2222-4222-8222-222222222222';
@@ -47,7 +47,9 @@ export function token(role: string, inst = INST, sub = PROF_A): string {
 }
 
 export const coordinator = { authorization: `Bearer ${token('coordinator')}` };
-export const internal = { authorization: `Bearer ${INTERNAL}` };
+export const internal = { 'x-internal-token': INTERNAL };
+/** Legacy form still accepted: the internal token as a bearer token. */
+export const internalBearer = { authorization: `Bearer ${INTERNAL}` };
 
 function klass(
   section: string,
@@ -115,10 +117,12 @@ export const REC1 = '90000000-0000-4000-8000-000000000001';
 export const REC2 = '90000000-0000-4000-8000-000000000002';
 export const REC3 = '90000000-0000-4000-8000-000000000003';
 
-export async function setup(options: { authDisabled?: boolean } = {}) {
+export async function setup(
+  options: { authDisabled?: boolean; repository?: AnalyticsRepository; directory?: Directory } = {},
+) {
   const fake = new FakeUpstreams();
-  const directory = new InMemoryDirectory();
-  const repository = new InMemoryAnalyticsRepository();
+  const directory = options.directory ?? new InMemoryDirectory();
+  const repository = options.repository ?? new InMemoryAnalyticsRepository();
   const clock = { now: () => new Date('2026-11-10T12:00:00.000Z') };
   const app = buildApp({
     repository,

@@ -62,3 +62,20 @@ Score = Dice coefficient of recording vs. class interval (`2·overlap / (recordi
 ## Technology
 
 TypeScript · Fastify · Zod · PostgreSQL · Pub/Sub
+
+## Integration stage
+
+- `DATABASE_URL` → Postgres (`PgAcademicRepository`): imports are applied in one transaction with bulk upserts;
+  classrooms unknown to organization → `422 unknown_reference`, conflicting unique data → `409 conflicting_data`.
+  Schema gaps: `data/migrations/pending/academic-integration.sql`.
+- Sync push (§3): `SYNC_TARGETS=identity=http://identity:4001,calendar=http://calendar:4005,notifications=http://notifications:4006,analytics=http://academic-analytics:4009`.
+  After every applied import (asynchronously) and on `POST /v1/sync/push {institutionId, targets?}` the canonical
+  sections / enrollments / classrooms (`ORGANIZATION_SERVICE_URL` `GET /v1/classrooms`) are mapped to each target's body
+  (`src/sync.ts`): identity `/v1/sync/sections` + `/v1/sync/enrollments` (replace, batched per section), calendar
+  `/v1/sections` + `/v1/enrollments/bulk`, notifications `/v1/sync/enrollments` (+ email), analytics
+  `/v1/sync/sections|enrollments|classrooms`. 3 attempts with exponential backoff per request; failed institutions are
+  retried every `SYNC_RETRY_INTERVAL_MS` (60 s). `GET /v1/sync/status` reports state, last error, pending institutions.
+- `GET /internal/v1/alert-context?institutionId&at&lookbackMinutes&lookaheadMinutes` → `{now, classWindows, devices, errors}`,
+  directly usable as the notifications `POST /v1/alerts/evaluate` body (windows include policy pre/post roll and the device
+  assigned to the classroom from device-management `GET /v1/devices`, `DEVICE_MANAGEMENT_ADMIN_TOKEN`).
+- `INTERNAL_API_TOKEN` → required as `x-internal-token` on `/internal/*` and the sync routes, and sent on sync pushes.
