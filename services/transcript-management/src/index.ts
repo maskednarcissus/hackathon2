@@ -1,14 +1,10 @@
-﻿import Fastify from 'fastify';
+import { buildApp } from './app.js';
+import { InMemoryTranscriptRepository } from './repository.js';
 
-const app = Fastify({ logger: true });
+const port = Number(process.env['PORT'] ?? 4008);
+const app = buildApp({ repository: new InMemoryTranscriptRepository(), logger: true });
 
-app.get('/health', async () => ({
-  status: 'ok',
-  service: 'transcript-management',
-}));
-
-const start = async (): Promise<void> => {
-  await app.listen({ port: 4008, host: '0.0.0.0' });
-};
-
-void start();
+app.listen({ port, host: '0.0.0.0' }).catch((err: unknown) => {
+  app.log.error(err);
+  process.exit(1);
+});

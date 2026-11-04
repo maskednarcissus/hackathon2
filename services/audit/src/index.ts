@@ -1,14 +1,10 @@
-﻿import Fastify from 'fastify';
+import { buildApp } from './app.js';
+import { InMemoryAuditRepository } from './repository.js';
 
-const app = Fastify({ logger: true });
+const port = Number(process.env['PORT'] ?? 4011);
+const app = buildApp({ repository: new InMemoryAuditRepository(), logger: true });
 
-app.get('/health', async () => ({
-  status: 'ok',
-  service: 'audit',
-}));
-
-const start = async (): Promise<void> => {
-  await app.listen({ port: 4011, host: '0.0.0.0' });
-};
-
-void start();
+app.listen({ port, host: '0.0.0.0' }).catch((err: unknown) => {
+  app.log.error(err);
+  process.exit(1);
+});

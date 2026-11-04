@@ -1,14 +1,19 @@
-﻿import Fastify from 'fastify';
+import { buildApp } from './app.js';
+import { HttpAuditClient, HttpOrganizationClient } from './clients.js';
+import { InMemoryAcademicRepository } from './repository.js';
 
-const app = Fastify({ logger: true });
+const port = Number(process.env['PORT'] ?? 4003);
+const organizationUrl = process.env['ORGANIZATION_SERVICE_URL'] ?? 'http://localhost:4002';
+const auditUrl = process.env['AUDIT_SERVICE_URL'] ?? 'http://localhost:4011';
 
-app.get('/health', async () => ({
-  status: 'ok',
-  service: 'academic-integration',
-}));
+const app = buildApp({
+  repository: new InMemoryAcademicRepository(),
+  organization: new HttpOrganizationClient(organizationUrl),
+  audit: new HttpAuditClient(auditUrl, (err) => app.log.warn({ err }, 'audit emission failed')),
+  logger: true,
+});
 
-const start = async (): Promise<void> => {
-  await app.listen({ port: 4003, host: '0.0.0.0' });
-};
-
-void start();
+app.listen({ port, host: '0.0.0.0' }).catch((err: unknown) => {
+  app.log.error(err);
+  process.exit(1);
+});
