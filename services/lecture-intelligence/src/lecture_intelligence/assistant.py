@@ -51,22 +51,13 @@ from lecture_intelligence.models import (
 )
 from lecture_intelligence.pipeline import PipelineError
 from lecture_intelligence.repository import LectureRepository
+from lecture_intelligence.safety import injection_suspected
 from lecture_intelligence.text import fold, token_overlap
 
 log = structlog.get_logger(__name__)
 
 ASSISTANT_PROMPT = "assistant-answer"
 PROFESSOR_STATEMENT_MIN_OVERLAP = 0.6
-
-_INJECTION_PATTERNS = [
-    re.compile(
-        r"\b(ignore|ignorem|ignora|desconsidere|esqueca|disregard|forget|override)\b"
-        r"[\w\s,]{0,40}\b(instruc(ao|oes)|instructions?|regras|rules|prompts?)\b"
-    ),
-    re.compile(r"\b(system prompt|prompt do sistema|prompt de sistema)\b"),
-    re.compile(r"\b(voce agora e|a partir de agora voce|you are now|aja como se|act as)\b"),
-    re.compile(r"(<\s*/?\s*(system|assistant|developer)\s*>|untrusted_[a-z_]+|\[\s*system\s*\])"),
-]
 
 _ATTRIBUTION_RE = re.compile(
     r"\b(segundo|de acordo com|conforme|como)\s+(o|a)\s+professor(a)?\b(\s+(disse|explicou|"
@@ -78,9 +69,7 @@ _ATTRIBUTION_RE = re.compile(
 
 
 def question_injection_suspected(question: str) -> bool:
-    folded = fold(question.replace("<", " <").replace(">", "> "))
-    raw = question.lower()
-    return any(p.search(folded) or p.search(raw) for p in _INJECTION_PATTERNS)
+    return injection_suspected(question)
 
 
 def strip_attribution(text: str) -> str:

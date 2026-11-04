@@ -166,9 +166,13 @@ class LectureStructurer:
             for i, item in enumerate(llm_topics)
             if (t := grounder.topic(f"{topic_prefix}[{i}]", item)) is not None
         ]
-        clean_summary = grounder.clean_prose("executiveSummary", summary) or ""
-        if any(r.injection_suspected for r in results):
+        clean_summary = grounder.summary(summary)
+        if any(r.injection_suspected for r in results) or grounder.injected:
             grounder.flag("$", "injection_suspected", dropped=False)
+        grounded_title = grounder.lecture_title(title)
+        final_topics = finalize_topics(topics)
+        if grounded_title is None:
+            grounded_title = final_topics[0].title if final_topics else (req.course_name or "Aula")
 
         structure = LectureStructure(
             lecture_summary_id=str(uuid.uuid4()),
@@ -181,9 +185,9 @@ class LectureStructurer:
             class_date=req.class_date,
             starts_at=req.starts_at,
             language=req.language,
-            title=title.strip(),
+            title=grounded_title,
             executive_summary=clean_summary,
-            topics=finalize_topics(topics),
+            topics=final_topics,
             concepts=dedupe_concepts(concepts),
             questions=dedupe_questions(questions),
             reading_references=dedupe_readings(readings),

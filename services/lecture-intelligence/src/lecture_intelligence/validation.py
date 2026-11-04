@@ -11,6 +11,7 @@ Items failing a rule are dropped and recorded as validation flags.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from lecture_intelligence.models import (
@@ -28,8 +29,11 @@ from lecture_intelligence.models import (
     ValidationFlag,
     ValidationReport,
 )
+from lecture_intelligence.safety import injection_suspected
 from lecture_intelligence.text import content_tokens, fold, strip_fabricated_quotes, token_overlap
 
+TOPIC_TITLE_MIN_OVERLAP = 0.5
+TITLE_MIN_CLEAN_OVERLAP = 0.5
 CONCEPT_TERM_MIN_OVERLAP = 0.6
 CONCEPT_DEFINITION_MIN_OVERLAP = 0.2
 READING_TITLE_MIN_OVERLAP = 0.6
@@ -48,6 +52,9 @@ class Grounder:
         self._position = {s.segment_index: i for i, s in enumerate(ordered)}
         self._ordered = ordered
         self.transcript_folded = fold(" ".join(s.text for s in ordered))
+        # Segments containing prompt-injection patterns are never evidence for anything.
+        self.injected = {s.segment_index for s in ordered if injection_suspected(s.text)}
+        self.clean_text = " ".join(s.text for s in ordered if s.segment_index not in self.injected)
 
     # ------------------------------------------------------------------ helpers
     def flag(self, path: str, reason: str, *, dropped: bool) -> None:
@@ -65,7 +72,13 @@ class Grounder:
             return None
         if len(valid) != len(set(indexes)):
             self.flag(path, "invalid_segment_reference_removed", dropped=False)
-        return valid
+        clean = [i for i in valid if i not in self.injected]
+        if not clean:
+            self.flag(path, "injection_supported", dropped=True)
+            return None
+        if len(clean) != len(valid):
+            self.flag(path, "injected_segment_reference_removed", dropped=False)
+        return clean
 
     def citations(self, path: str, indexes: list[int]) -> list[int] | None:
         """Valid cited indexes, or ``None`` (and a drop flag) when nothing valid is cited."""
@@ -78,12 +91,38 @@ class Grounder:
             pos = self._position[index]
             positions.update({pos - 1, pos, pos + 1})
         return " ".join(
-            self._ordered[p].text for p in sorted(positions) if 0 <= p < len(self._ordered)
+            self._ordered[p].text
+            for p in sorted(positions)
+            if 0 <= p < len(self._ordered) and self._ordered[p].segment_index not in self.injected
         )
 
     def span(self, indexes: list[int]) -> tuple[int, int]:
         cited = [self._by_index[i] for i in indexes]
         return min(s.start_ms for s in cited), max(s.end_ms for s in cited)
+
+    def lecture_title(self, title: str) -> str | None:
+        """The lecture title, or ``None`` when it is only supported by injected segments."""
+
+        if self.injected and token_overlap(title, self.clean_text) < TITLE_MIN_CLEAN_OVERLAP:
+            self.flag("title", "injection_supported", dropped=True)
+            return None
+        return title.strip()
+
+    def summary(self, text: str) -> str:
+        """Executive summary without fabricated quotes or injection-only sentences."""
+
+        cleaned = self.clean_prose("executiveSummary", text) or ""
+        if not self.injected:
+            return cleaned
+        kept = [
+            sentence
+            for sentence in re.split(r"(?<=[.!?])\s+", cleaned)
+            if not content_tokens(sentence)
+            or token_overlap(sentence, self.clean_text) >= TITLE_MIN_CLEAN_OVERLAP
+        ]
+        if len(kept) != len(re.split(r"(?<=[.!?])\s+", cleaned)):
+            self.flag("executiveSummary", "injection_supported", dropped=False)
+        return " ".join(kept).strip()
 
     def clean_prose(self, path: str, text: str | None) -> str | None:
         if text is None:
@@ -100,7 +139,10 @@ class Grounder:
         indexes = self._citations(path, item.segmentIndexes)
         if indexes is None:
             return None
-        if content_tokens(item.title) and token_overlap(item.title, self.evidence(indexes)) == 0:
+        if (
+            content_tokens(item.title)
+            and token_overlap(item.title, self.evidence(indexes)) < TOPIC_TITLE_MIN_OVERLAP
+        ):
             self.flag(path, "ungrounded", dropped=True)
             return None
         start, end = self.span(indexes)

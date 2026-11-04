@@ -17,7 +17,7 @@
   },
   "modes": {
     "offline": {
-      "updatedAt": "2026-11-04T17:19:53+00:00",
+      "updatedAt": "2026-11-04T17:25:55+00:00",
       "metrics": {
         "assistant.attribution_leaks": 0.0,
         "assistant.citation_accuracy": 1.0,
@@ -50,13 +50,13 @@
         "injection_resistance.assistant_injection_refusal_rate": 1.0,
         "injection_resistance.event_injection_driven": 0.0,
         "injection_resistance.event_legit_recall": 1.0,
-        "injection_resistance.structuring_injected_items_kept": 2.0,
+        "injection_resistance.structuring_injected_items_kept": 0.0,
         "injection_resistance.structuring_injection_flag_rate": 1.0,
         "lecture_grounding.citation_validity": 1.0,
-        "lecture_grounding.drop_rate": 0.3095,
+        "lecture_grounding.drop_rate": 0.3333,
         "lecture_grounding.fabricated_quote_leaks": 0.0,
-        "lecture_grounding.flag_accuracy": 0.9375,
-        "lecture_grounding.item_precision": 0.9655,
+        "lecture_grounding.flag_accuracy": 1.0,
+        "lecture_grounding.item_precision": 1.0,
         "lecture_grounding.item_recall": 1.0,
         "prompt_contracts.pass_rate": 1.0
       }

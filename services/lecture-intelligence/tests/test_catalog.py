@@ -63,6 +63,7 @@ def _seed(harness: Harness) -> None:
             ],
         }
         body = structure_body(
+            LECTURE_TEXTS[:6],
             scheduledClassId=class_id,
             classSectionId=section,
             courseId=course,
