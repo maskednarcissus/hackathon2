@@ -67,6 +67,11 @@ class Grounder:
             self.flag(path, "invalid_segment_reference_removed", dropped=False)
         return valid
 
+    def citations(self, path: str, indexes: list[int]) -> list[int] | None:
+        """Valid cited indexes, or ``None`` (and a drop flag) when nothing valid is cited."""
+
+        return self._citations(path, indexes)
+
     def evidence(self, indexes: list[int]) -> str:
         positions: set[int] = set()
         for index in indexes:

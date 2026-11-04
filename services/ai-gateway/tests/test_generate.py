@@ -182,8 +182,10 @@ def test_prompt_listing(harness: Harness) -> None:
     items = harness.client.get("/v1/prompts").json()["items"]
     assert {i["id"] for i in items} >= {"event-extraction", "lecture-structuring"}
     detail = harness.client.get("/v1/prompts/lecture-structuring").json()
-    assert detail["activeVersion"] == "2026-11-04.1"
-    assert detail["versions"][0]["active"] is True
+    assert detail["activeVersion"] == "2026-11-05.1"
+    assert [v["active"] for v in detail["versions"]] == [False, True]
+    revision = harness.client.get("/v1/prompts/revision-materials").json()
+    assert revision["versions"][0]["task"] == "revision_materials"
     assert harness.client.get("/v1/prompts/missing").status_code == 404
 
 

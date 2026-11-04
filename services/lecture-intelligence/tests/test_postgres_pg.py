@@ -23,6 +23,7 @@ from lecture_intelligence.adapters.postgres import (
     PostgresAssistantRepository,
     PostgresEventInbox,
     PostgresLectureRepository,
+    PostgresRevisionRepository,
     create_pool,
 )
 from lecture_intelligence.app import LectureDeps, create_app
@@ -74,7 +75,7 @@ STRUCTURE: dict[str, Any] = {
 
 @pytest.fixture(scope="module")
 def database() -> Iterator[str]:
-    with fresh_database(["lecture-intelligence.sql"]) as url:
+    with fresh_database(["lecture-intelligence.sql", "lecture-intelligence-phase6.sql"]) as url:
         seed_academic(url, IDS)
         yield url
 
@@ -98,6 +99,7 @@ def env(database: str) -> Iterator[dict[str, Any]]:
         academic=FakeAcademic(),
         assistant_repository=PostgresAssistantRepository(pool, memory_turns=6),
         inbox=PostgresEventInbox(pool, "lecture-intelligence"),
+        revision_repository=PostgresRevisionRepository(pool),
         pool=pool,
     )
     with TestClient(create_app(deps)) as client:
@@ -293,3 +295,63 @@ def test_event_inbox_is_durable(env: dict[str, Any]) -> None:
     with psycopg.connect(env["db"]) as conn:
         row = conn.execute("SELECT consumer, event_type FROM event_inbox").fetchone()
     assert row == ("lecture-intelligence", "transcript.created")
+
+
+def test_revision_plan_reviews_and_dsr(env: dict[str, Any]) -> None:
+    created = _structure(env)
+    assert "id" in created["concepts"][0]
+    inflacao = created["concepts"][0]["id"]
+    env["transcripts"].segments[IDS["transcript"]] = [
+        Segment.model_validate(s) for s in make_segments(LECTURE_TEXTS)
+    ]
+    env["gateway"].responders["revision-materials"] = lambda _: {
+        "flashcards": [
+            {
+                "conceptId": inflacao,
+                "front": "O que é inflação?",
+                "back": "Aumento generalizado e persistente do nível de preços.",
+                "segmentIndexes": [1],
+            }
+        ],
+        "quiz": [],
+    }
+    client = env["client"]
+    stored = client.get(f"/v1/lectures/{IDS['scheduled_class']}").json()
+    assert stored["concepts"][0]["id"] == inflacao and stored["language"] == "pt-BR"
+
+    body = {"studentId": IDS["student"], "classSectionIds": [IDS["section"]], "focus": [inflacao]}
+    plan = client.post("/v1/revision/plans", json=body).json()
+    kinds = sorted(i["kind"] for i in plan["items"])
+    assert kinds == ["concept_review", "flashcards", "summary"]
+    again = client.get(
+        f"/v1/revision/plans/{plan['planId']}", params={"studentId": IDS["student"]}
+    ).json()
+    assert again["items"] == plan["items"] and again["signals"] == plan["signals"]
+
+    due = client.get("/v1/revision/due", params={"studentId": IDS["student"]}).json()
+    assert due["total"] == 2
+    card = next(i for i in plan["items"] if i["kind"] == "flashcards")
+    for grade in (5, 5):
+        result = client.post("/v1/revision/reviews", json={"itemId": card["id"], "grade": grade})
+        assert result.status_code == 200
+    assert result.json()["intervalDays"] == 6 and result.json()["repetitions"] == 2
+    review = next(i for i in plan["items"] if i["kind"] == "concept_review")
+    client.post("/v1/revision/reviews", json={"itemId": review["id"], "grade": 1})
+    assert client.get("/v1/revision/due", params={"studentId": IDS["student"]}).json()["total"] == 0
+    second = client.post(
+        "/v1/revision/plans",
+        json={"studentId": IDS["student"], "classSectionIds": [IDS["section"]]},
+    ).json()
+    assert second["signals"]["strugglingConcepts"] == 1
+    other = {"itemId": card["id"], "grade": 3, "studentId": IDS["student_2"]}
+    assert client.post("/v1/revision/reviews", json=other).status_code == 404
+
+    subject = {"subjectType": "student", "subjectId": IDS["student"]}
+    access = client.post("/internal/v1/dsr/access", json=subject).json()
+    assert len(access["export"]["revisionPlans"]) == 2
+    assert len(access["export"]["revisionReviews"]) == 3
+    deleted = client.post("/internal/v1/dsr/deletion", json=subject).json()
+    assert deleted["items"] == 3 + 2
+    with psycopg.connect(env["db"]) as conn:
+        row = conn.execute("SELECT COUNT(*) FROM revision_schedules").fetchone()
+    assert row is not None and row[0] == 0

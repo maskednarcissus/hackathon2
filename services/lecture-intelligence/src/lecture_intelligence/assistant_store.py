@@ -55,6 +55,10 @@ class AssistantRepository(Protocol):
 
     async def add_feedback(self, answer_id: str, entry: dict[str, Any]) -> None: ...
 
+    async def recent_questions(self, student_id: str, limit: int = 50) -> list[str]:
+        """The student's own most recent assistant questions (revision signal, 6.2)."""
+        ...
+
     # LGPD data-subject rights (integration stage §5)
     async def export_subject(self, student_id: str) -> dict[str, Any]: ...
 
@@ -84,6 +88,11 @@ class InMemoryAssistantRepository:
 
     async def add_feedback(self, answer_id: str, entry: dict[str, Any]) -> None:
         self.answers[answer_id].feedback.append(entry)
+
+    async def recent_questions(self, student_id: str, limit: int = 50) -> list[str]:
+        own = [a for a in self.answers.values() if a.student_id == student_id]
+        own.sort(key=lambda a: a.created_at, reverse=True)
+        return [a.question for a in own if a.question != ANONYMISED_QUESTION][:limit]
 
     async def export_subject(self, student_id: str) -> dict[str, Any]:
         conversations = [c for c in self.conversations.values() if c.student_id == student_id]

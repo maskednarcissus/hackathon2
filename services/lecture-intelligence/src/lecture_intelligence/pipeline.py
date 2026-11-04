@@ -180,6 +180,7 @@ class LectureStructurer:
             course_name=req.course_name,
             class_date=req.class_date,
             starts_at=req.starts_at,
+            language=req.language,
             title=title.strip(),
             executive_summary=clean_summary,
             topics=finalize_topics(topics),

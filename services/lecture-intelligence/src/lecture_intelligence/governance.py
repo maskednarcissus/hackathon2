@@ -16,6 +16,7 @@ from lecture_intelligence.assistant_store import AssistantRepository
 from lecture_intelligence.models import UUID_PATTERN, CamelModel
 from lecture_intelligence.pipeline import PipelineError
 from lecture_intelligence.repository import LectureRepository
+from lecture_intelligence.revision import RevisionRepository
 
 SERVICE = "lecture-intelligence"
 RETENTION_KIND = "summary"
@@ -64,7 +65,10 @@ async def retention_delete(
 
 
 async def handle_dsr(
-    store: AssistantRepository, dsr_type: DsrType, req: DsrRequest
+    store: AssistantRepository,
+    dsr_type: DsrType,
+    req: DsrRequest,
+    revision: RevisionRepository | None = None,
 ) -> dict[str, Any]:
     base: dict[str, Any] = {"service": SERVICE, "requestId": req.request_id}
     if req.subject_type != "student":
@@ -72,9 +76,16 @@ async def handle_dsr(
     if dsr_type == "access":
         export = await store.export_subject(req.subject_id)
         items = len(export["conversations"]) + len(export["answers"]) + len(export["feedback"])
+        if revision is not None:
+            revision_export = await revision.export_subject(req.subject_id)
+            export.update(revision_export)
+            items += len(revision_export["revisionPlans"]) + len(revision_export["revisionReviews"])
         return {**base, "status": "completed", "items": items, "export": export}
     if dsr_type == "deletion":
-        return {**base, "status": "completed", "items": await store.delete_subject(req.subject_id)}
+        count = await store.delete_subject(req.subject_id)
+        if revision is not None:
+            count += await revision.delete_subject(req.subject_id)
+        return {**base, "status": "completed", "items": count}
     if dsr_type == "anonymization":
         count = await store.anonymize_subject(req.subject_id)
         return {**base, "status": "completed", "items": count}

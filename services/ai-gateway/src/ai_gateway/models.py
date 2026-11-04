@@ -13,6 +13,7 @@ Task = Literal[
     "date_resolution",
     "assistant_answer",
     "group_investigation",
+    "revision_materials",
 ]
 JsonScalar = str | int | float | bool | None
 

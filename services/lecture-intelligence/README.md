@@ -55,6 +55,27 @@ Port **8006** · Python · FastAPI · calls `ai-gateway` (never a model SDK dire
 - Conversation memory: last 6 turns per `conversationId`, bound to the student and institution
   (another student's id → `404`).
 
+## Revision materials (Phase 6.2) and languages (6.4)
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/v1/revision/plans` | `{studentId, classSectionIds, from?, to?, focus?: conceptIds[], institutionId?, maxConcepts? (1–30, 10), maxLectures? (1–10, 5)}` → `201` plan |
+| `GET` | `/v1/revision/plans/{planId}?studentId` | Stored plan (owner only, else `404`) |
+| `POST` | `/v1/revision/reviews` | `{itemId, grade 0–5, studentId?}` → SM-2 schedule; `422` for `summary` items, `404` for another student's item |
+| `GET` | `/v1/revision/due?studentId&limit` | Reviewable items due now, with `schedule` |
+
+* Inputs: latest lecture structures of the requested sections (in the date range) and **only the student's
+  own** signals — their assistant questions (concept term mentioned), their SM-2 history (reviews graded < 3)
+  and the explicit `focus` list. Searches and content reports are not available to this service yet.
+* Items: one `summary` per selected lecture and one `concept_review` per selected concept (from the
+  validated structure); `flashcards` and `quiz` items (one card/question each) from the `revision-materials`
+  prompt, validated like lecture structures — known concept, valid segment citations, card back ≥ 30 % /
+  correct option ≥ 40 % lexically supported by the cited segments ±1, 4 distinct options, fabricated quotes
+  removed. Failures degrade gracefully to structure-only items with `limitations`.
+* Auth: a verified student token must match `studentId` (`403`); review ownership mismatches are `404`.
+* DSR access/deletion include revision plans and reviews. Lectures now carry `language` (from the
+  transcript) and concepts a stable `id`; the structuring prompts `2026-11-05.1` write in that language.
+
 ## Integration stage
 
 | Concern | Behaviour |

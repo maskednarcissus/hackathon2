@@ -39,6 +39,13 @@ from lecture_intelligence.models import (
     ValidationFlag,
     ValidationReport,
 )
+from lecture_intelligence.revision import (
+    REVIEWABLE,
+    RevisionItem,
+    RevisionPlan,
+    Schedule,
+    sm2,
+)
 
 _UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
@@ -72,7 +79,7 @@ _SUMMARY_SELECT = """
 SELECT ls.id, ls.scheduled_class_id, ls.transcript_id, ls.title, ls.executive_summary,
        ls.processing_version, ls.model_name, ls.class_section_id, ls.course_id, ls.course_name,
        ls.class_date, ls.starts_at, ls.prompt_id, ls.prompt_version, ls.chunk_count,
-       ls.ai_request_ids, ls.dropped_items, ls.validation_flags, ls.created_at,
+       ls.ai_request_ids, ls.dropped_items, ls.validation_flags, ls.created_at, ls.language,
        c.institution_id
 FROM lecture_summaries ls
 JOIN scheduled_classes sc ON sc.id = ls.scheduled_class_id
@@ -96,9 +103,9 @@ class PostgresLectureRepository:
                     processing_version, processing_status, model_provider, model_name,
                     class_section_id, course_id, course_name, class_date, starts_at,
                     prompt_id, prompt_version, chunk_count, ai_request_ids, dropped_items,
-                    validation_flags, created_at)
+                    validation_flags, created_at, language)
                 VALUES (%s, %s, %s, %s, %s, %s, 'complete', 'ai-gateway', %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s::uuid[], %s, %s, %s)
+                        %s, %s, %s, %s, %s::uuid[], %s, %s, %s, %s)
                 """,
                 (
                     s.lecture_summary_id,
@@ -120,6 +127,7 @@ class PostgresLectureRepository:
                     s.validation.dropped_items,
                     Jsonb([f.model_dump(by_alias=True) for f in s.validation.flags]),
                     _parse_ts(s.created_at),
+                    s.language,
                 ),
             )
             for topic in s.topics:
@@ -128,9 +136,16 @@ class PostgresLectureRepository:
                     await self._insert_topic(conn, s.lecture_summary_id, sub, parent)
             for c in s.concepts:
                 await conn.execute(
-                    "INSERT INTO concepts (lecture_summary_id, term, definition, example, "
-                    "segment_indexes) VALUES (%s, %s, %s, %s, %s)",
-                    (s.lecture_summary_id, c.term, c.definition, c.example, c.segment_indexes),
+                    "INSERT INTO concepts (id, lecture_summary_id, term, definition, example, "
+                    "segment_indexes) VALUES (%s, %s, %s, %s, %s, %s)",
+                    (
+                        c.id,
+                        s.lecture_summary_id,
+                        c.term,
+                        c.definition,
+                        c.example,
+                        c.segment_indexes,
+                    ),
                 )
             for q in s.questions:
                 await conn.execute(
@@ -282,11 +297,13 @@ def _structure(row: dict[str, Any], children: dict[str, list[dict[str, Any]]]) -
         course_name=row["course_name"],
         class_date=_iso(row["class_date"]),
         starts_at=_iso(row["starts_at"]),
+        language=row["language"] or "pt-BR",
         title=row["title"],
         executive_summary=row["executive_summary"],
         topics=topics,
         concepts=[
             Concept(
+                id=str(c["id"]),
                 term=c["term"],
                 definition=c["definition"],
                 example=c["example"],
@@ -495,6 +512,17 @@ class PostgresAssistantRepository:
                 (entry["feedbackId"], entry["helpful"], entry.get("comment"), answer_id),
             )
 
+    async def recent_questions(self, student_id: str, limit: int = 50) -> list[str]:
+        if not is_uuid(student_id):
+            return []
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT question FROM assistant_answers WHERE student_id = %s AND question <> %s "
+                "ORDER BY created_at DESC LIMIT %s",
+                (student_id, ANONYMISED_QUESTION, limit),
+            )
+            return [str(r[0]) for r in await cur.fetchall()]
+
     async def export_subject(self, student_id: str) -> dict[str, Any]:
         async with self._pool.connection() as conn:
             cur = conn.cursor(row_factory=dict_row)
@@ -595,3 +623,239 @@ class PostgresEventInbox:
                 "ON CONFLICT (consumer, event_id) DO NOTHING",
                 (self._consumer, event_id, event_type),
             )
+
+
+# ----------------------------------------------------------------------------- revision (6.2)
+class PostgresRevisionRepository:
+    def __init__(self, pool: AsyncConnectionPool) -> None:
+        self._pool = pool
+
+    async def save_plan(self, plan: RevisionPlan) -> None:
+        async with self._pool.connection() as conn, conn.transaction():
+            await conn.execute(
+                "INSERT INTO revision_plans (id, student_id, class_section_ids, from_date, "
+                "to_date, focus, signals, validation, limitations, generated_at) "
+                "VALUES (%s, %s, %s::uuid[], %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    plan.id,
+                    plan.student_id,
+                    [s for s in plan.class_section_ids if is_uuid(s)],
+                    plan.from_date[:10] if plan.from_date else None,
+                    plan.to_date[:10] if plan.to_date else None,
+                    plan.focus,
+                    Jsonb(plan.signals),
+                    Jsonb(plan.validation.model_dump(by_alias=True)),
+                    plan.limitations,
+                    plan.generated_at,
+                ),
+            )
+            for order, item in enumerate(plan.items):
+                await conn.execute(
+                    "INSERT INTO revision_items (id, plan_id, student_id, kind, "
+                    "scheduled_class_id, concept_ids, content, source_citations, item_order, "
+                    "created_at) "
+                    "VALUES (%s, %s, %s, %s, %s, %s::uuid[], %s, %s, %s, %s)",
+                    (
+                        item.id,
+                        plan.id,
+                        item.student_id,
+                        item.kind,
+                        item.scheduled_class_id,
+                        [c for c in item.concept_ids if is_uuid(c)],
+                        Jsonb(item.content),
+                        Jsonb(item.source_citations),
+                        order,
+                        item.created_at,
+                    ),
+                )
+                if item.kind in REVIEWABLE:
+                    await conn.execute(
+                        "INSERT INTO revision_schedules (item_id, student_id, due_at) "
+                        "VALUES (%s, %s, %s)",
+                        (item.id, item.student_id, plan.generated_at),
+                    )
+
+    async def get_plan(self, plan_id: str) -> RevisionPlan | None:
+        if not is_uuid(plan_id):
+            return None
+        async with self._pool.connection() as conn:
+            cur = conn.cursor(row_factory=dict_row)
+            await cur.execute("SELECT * FROM revision_plans WHERE id = %s", (plan_id,))
+            row = await cur.fetchone()
+            if row is None:
+                return None
+            await cur.execute(
+                "SELECT * FROM revision_items WHERE plan_id = %s ORDER BY item_order", (plan_id,)
+            )
+            items = [_revision_item(r) for r in await cur.fetchall()]
+        validation = row["validation"] or {}
+        return RevisionPlan(
+            id=str(row["id"]),
+            student_id=str(row["student_id"]),
+            class_section_ids=[str(s) for s in row["class_section_ids"]],
+            from_date=_iso(row["from_date"]),
+            to_date=_iso(row["to_date"]),
+            focus=list(row["focus"]),
+            generated_at=row["generated_at"],
+            items=items,
+            signals=dict(row["signals"] or {}),
+            validation=ValidationReport.model_validate(
+                {
+                    "droppedItems": validation.get("droppedItems", 0),
+                    "flags": validation.get("flags", []),
+                }
+            ),
+            limitations=list(row["limitations"]),
+        )
+
+    async def get_item(self, item_id: str) -> tuple[RevisionItem, Schedule | None] | None:
+        if not is_uuid(item_id):
+            return None
+        async with self._pool.connection() as conn:
+            cur = conn.cursor(row_factory=dict_row)
+            await cur.execute(
+                "SELECT i.*, s.repetitions, s.interval_days, s.easiness, s.due_at, s.last_grade, "
+                "s.last_reviewed_at, s.item_id AS scheduled FROM revision_items i "
+                "LEFT JOIN revision_schedules s ON s.item_id = i.id WHERE i.id = %s",
+                (item_id,),
+            )
+            row = await cur.fetchone()
+        if row is None:
+            return None
+        return _revision_item(row), (_schedule(row) if row["scheduled"] else None)
+
+    async def record_review(
+        self, item_id: str, student_id: str, grade: int, now: datetime
+    ) -> Schedule:
+        async with self._pool.connection() as conn, conn.transaction():
+            cur = conn.cursor(row_factory=dict_row)
+            await cur.execute(
+                "SELECT item_id, student_id, repetitions, interval_days, easiness, due_at, "
+                "last_grade, last_reviewed_at FROM revision_schedules "
+                "WHERE item_id = %s FOR UPDATE",
+                (item_id,),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                raise LookupError(item_id)
+            updated = sm2(_schedule(row), grade, now)
+            await conn.execute(
+                "UPDATE revision_schedules SET repetitions = %s, interval_days = %s, "
+                "easiness = %s, due_at = %s, last_grade = %s, last_reviewed_at = %s "
+                "WHERE item_id = %s",
+                (
+                    updated.repetitions,
+                    updated.interval_days,
+                    round(updated.easiness, 3),
+                    updated.due_at,
+                    grade,
+                    now,
+                    item_id,
+                ),
+            )
+            await conn.execute(
+                "INSERT INTO revision_reviews (item_id, student_id, grade, reviewed_at) "
+                "VALUES (%s, %s, %s, %s)",
+                (item_id, student_id, grade, now),
+            )
+        return updated
+
+    async def due(
+        self, student_id: str, now: datetime, limit: int
+    ) -> tuple[list[tuple[RevisionItem, Schedule]], int]:
+        if not is_uuid(student_id):
+            return [], 0
+        async with self._pool.connection() as conn:
+            cur = conn.cursor(row_factory=dict_row)
+            await cur.execute(
+                "SELECT COUNT(*) AS n FROM revision_schedules "
+                "WHERE student_id = %s AND due_at <= %s",
+                (student_id, now),
+            )
+            count_row = await cur.fetchone()
+            await cur.execute(
+                "SELECT i.*, s.repetitions, s.interval_days, s.easiness, s.due_at, s.last_grade, "
+                "s.last_reviewed_at FROM revision_schedules s "
+                "JOIN revision_items i ON i.id = s.item_id "
+                "WHERE s.student_id = %s AND s.due_at <= %s ORDER BY s.due_at, i.id LIMIT %s",
+                (student_id, now, limit),
+            )
+            rows = await cur.fetchall()
+        total = int(count_row["n"]) if count_row else 0
+        return [(_revision_item(r), _schedule(r)) for r in rows], total
+
+    async def concept_struggles(self, student_id: str) -> dict[str, int]:
+        if not is_uuid(student_id):
+            return {}
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT c.concept_id, COUNT(*) FROM revision_reviews r "
+                "JOIN revision_items i ON i.id = r.item_id, UNNEST(i.concept_ids) AS c(concept_id) "
+                "WHERE r.student_id = %s AND r.grade < 3 GROUP BY c.concept_id",
+                (student_id,),
+            )
+            return {str(r[0]): int(r[1]) for r in await cur.fetchall()}
+
+    async def export_subject(self, student_id: str) -> dict[str, Any]:
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT id FROM revision_plans WHERE student_id = %s ORDER BY generated_at",
+                (student_id,),
+            )
+            plan_ids = [str(r[0]) for r in await cur.fetchall()]
+            cur = await conn.execute(
+                "SELECT item_id, grade, reviewed_at FROM revision_reviews WHERE student_id = %s "
+                "ORDER BY reviewed_at",
+                (student_id,),
+            )
+            reviews = await cur.fetchall()
+        plans = [p for pid in plan_ids if (p := await self.get_plan(pid)) is not None]
+        return {
+            "revisionPlans": [p.to_json() for p in plans],
+            "revisionReviews": [
+                {
+                    "itemId": str(r[0]),
+                    "studentId": student_id,
+                    "grade": r[1],
+                    "reviewedAt": r[2].isoformat(),
+                }
+                for r in reviews
+            ],
+        }
+
+    async def delete_subject(self, student_id: str) -> int:
+        async with self._pool.connection() as conn, conn.transaction():
+            reviews = await conn.execute(
+                "DELETE FROM revision_reviews WHERE student_id = %s", (student_id,)
+            )
+            plans = await conn.execute(
+                "DELETE FROM revision_plans WHERE student_id = %s", (student_id,)
+            )
+            return reviews.rowcount + plans.rowcount
+
+
+def _revision_item(row: dict[str, Any]) -> RevisionItem:
+    return RevisionItem(
+        id=str(row["id"]),
+        plan_id=str(row["plan_id"]),
+        student_id=str(row["student_id"]),
+        kind=row["kind"],
+        scheduled_class_id=str(row["scheduled_class_id"]),
+        concept_ids=[str(c) for c in row["concept_ids"]],
+        content=dict(row["content"]),
+        source_citations=list(row["source_citations"]),
+        created_at=row["created_at"],
+    )
+
+
+def _schedule(row: dict[str, Any]) -> Schedule:
+    return Schedule(
+        item_id=str(row.get("item_id") or row["id"]),
+        student_id=str(row["student_id"]),
+        repetitions=row["repetitions"],
+        interval_days=row["interval_days"],
+        easiness=float(row["easiness"]),
+        due_at=row["due_at"],
+        last_grade=row["last_grade"],
+        last_reviewed_at=row["last_reviewed_at"],
+    )

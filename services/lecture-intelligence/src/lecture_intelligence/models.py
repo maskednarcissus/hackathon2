@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -129,6 +130,7 @@ class Topic(Subtopic):
 
 
 class Concept(CamelModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     term: str
     definition: str
     example: str | None = None
@@ -178,6 +180,7 @@ class LectureStructure(CamelModel):
     course_name: str | None = None
     class_date: str | None = None
     starts_at: str | None = None
+    language: str = "pt-BR"
     title: str
     executive_summary: str
     topics: list[Topic]

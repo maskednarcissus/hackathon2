@@ -54,6 +54,13 @@ from lecture_intelligence.repository import (
     InMemoryLectureRepository,
     LectureRepository,
 )
+from lecture_intelligence.revision import (
+    InMemoryRevisionRepository,
+    PlanRequest,
+    ReviewRequest,
+    RevisionRepository,
+    RevisionService,
+)
 from lecture_intelligence.security import install_internal_token
 
 log = structlog.get_logger(__name__)
@@ -73,6 +80,7 @@ class LectureDeps:
     assistant_repository: AssistantRepository = field(default_factory=InMemoryAssistantRepository)
     assistant_settings: AssistantSettings = field(default_factory=AssistantSettings)
     inbox: EventInbox = field(default_factory=InMemoryEventInbox)
+    revision_repository: RevisionRepository = field(default_factory=InMemoryRevisionRepository)
     actors: ActorResolver = field(default_factory=lambda: ActorResolver(None))
     internal_token: str | None = None
     pool: Any = None  # psycopg_pool.AsyncConnectionPool when DATABASE_URL is set
@@ -96,6 +104,7 @@ def deps_from_env() -> LectureDeps:
             PostgresAssistantRepository,
             PostgresEventInbox,
             PostgresLectureRepository,
+            PostgresRevisionRepository,
             create_pool,
         )
 
@@ -107,6 +116,7 @@ def deps_from_env() -> LectureDeps:
                 pool, assistant_settings.memory_turns
             ),
             "inbox": PostgresEventInbox(pool, "lecture-intelligence"),
+            "revision_repository": PostgresRevisionRepository(pool),
         }
     jwks_url = os.environ.get("IDENTITY_JWKS_URL")
     return LectureDeps(
@@ -177,6 +187,26 @@ def create_app(deps: LectureDeps | None = None) -> FastAPI:
         if deps.search is not None
         else None
     )
+    revision = RevisionService(
+        lectures=deps.repository,
+        transcripts=deps.transcripts,
+        gateway=deps.gateway,
+        assistant=deps.assistant_repository,
+        repository=deps.revision_repository,
+    )
+
+    async def authorise_student(request: Request, student_id: str) -> Actor | None:
+        """A verified student token may only act for its own ``pid`` (403 otherwise)."""
+
+        actor = await deps.actors.resolve(request)
+        if (
+            actor is not None
+            and actor.verified
+            and actor.role == "student"
+            and actor.actor_id != student_id
+        ):
+            raise PipelineError("forbidden", "studentId does not match the caller", 403)
+        return actor
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -290,14 +320,7 @@ def create_app(deps: LectureDeps | None = None) -> FastAPI:
     async def ask(body: AskRequest, request: Request) -> JSONResponse:
         if assistant is None:
             raise PipelineError("assistant_unavailable", "Search is not configured", 503)
-        actor = await deps.actors.resolve(request)
-        if (
-            actor is not None
-            and actor.verified
-            and actor.role == "student"
-            and actor.actor_id != body.student_id
-        ):
-            raise PipelineError("forbidden", "studentId does not match the caller", 403)
+        actor = await authorise_student(request, body.student_id)
         result = await assistant.ask(body)
         background = BackgroundTasks()
         background.add_task(
@@ -323,6 +346,39 @@ def create_app(deps: LectureDeps | None = None) -> FastAPI:
             raise PipelineError("assistant_unavailable", "Search is not configured", 503)
         return await assistant.feedback(body)
 
+    # ---------------------------------------------------------------- revision (6.2)
+    @app.post("/v1/revision/plans", status_code=201)
+    async def create_revision_plan(body: PlanRequest, request: Request) -> dict[str, Any]:
+        await authorise_student(request, body.student_id)
+        return (await revision.plan(body)).to_json()
+
+    @app.get("/v1/revision/plans/{plan_id}")
+    async def get_revision_plan(
+        plan_id: str,
+        request: Request,
+        student_id: str = Query(alias="studentId", pattern=UUID_RE),
+    ) -> dict[str, Any]:
+        await authorise_student(request, student_id)
+        plan = await deps.revision_repository.get_plan(plan_id)
+        if plan is None or plan.student_id != student_id:
+            raise PipelineError("not_found", "Unknown revision plan", 404)
+        return plan.to_json()
+
+    @app.post("/v1/revision/reviews")
+    async def review_item(body: ReviewRequest, request: Request) -> dict[str, Any]:
+        actor = await deps.actors.resolve(request)
+        caller = actor.actor_id if actor and actor.verified and actor.role == "student" else None
+        return await revision.review(body, caller)
+
+    @app.get("/v1/revision/due")
+    async def due_items(
+        request: Request,
+        student_id: str = Query(alias="studentId", pattern=UUID_RE),
+        limit: int = Query(default=20, ge=1, le=100),
+    ) -> dict[str, Any]:
+        await authorise_student(request, student_id)
+        return await revision.due(student_id, limit)
+
     # ---------------------------------------------------------------- governance (internal)
     @app.get("/internal/v1/retention/candidates")
     async def retention_candidates_route(
@@ -338,7 +394,7 @@ def create_app(deps: LectureDeps | None = None) -> FastAPI:
 
     @app.post("/internal/v1/dsr/{dsr_type}")
     async def dsr_route(dsr_type: DsrType, body: DsrRequest) -> dict[str, Any]:
-        return await handle_dsr(deps.assistant_repository, dsr_type, body)
+        return await handle_dsr(deps.assistant_repository, dsr_type, body, deps.revision_repository)
 
     async def handle_transcript_event(request: Request) -> JSONResponse:
         try:
