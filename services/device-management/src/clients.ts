@@ -95,17 +95,29 @@ async function fetchJson(
   }
 }
 
+export interface HttpClientOptions {
+  timeoutMs?: number;
+  /** Sent as `x-internal-token` (integration stage §4). */
+  internalToken?: string | undefined;
+}
+
+const internalHeaders = (token: string | undefined): Record<string, string> =>
+  token ? { 'x-internal-token': token } : {};
+
 export class HttpOrganizationClient implements OrganizationClient {
+  private readonly timeoutMs: number;
   constructor(
     private readonly baseUrl: string,
-    private readonly timeoutMs = 5000,
-  ) {}
+    private readonly options: HttpClientOptions = {},
+  ) {
+    this.timeoutMs = options.timeoutMs ?? 5000;
+  }
 
   async getClassroom(classroomId: string): Promise<ClassroomInfo | null> {
     const res = await fetchJson(
       'organization',
       `${this.baseUrl}/v1/classrooms/${encodeURIComponent(classroomId)}`,
-      {},
+      { headers: internalHeaders(this.options.internalToken) },
       this.timeoutMs,
     );
     if (res.status === 404) return null;
@@ -116,15 +128,23 @@ export class HttpOrganizationClient implements OrganizationClient {
 }
 
 export class HttpScheduleClient implements ScheduleClient {
+  private readonly timeoutMs: number;
   constructor(
     private readonly baseUrl: string,
-    private readonly timeoutMs = 5000,
-  ) {}
+    private readonly options: HttpClientOptions = {},
+  ) {
+    this.timeoutMs = options.timeoutMs ?? 5000;
+  }
 
   async getRecordingPlan(classroomId: string, from: string, to: string): Promise<RecordingPlan> {
     const qs = new URLSearchParams({ from, to });
     const url = `${this.baseUrl}/v1/classrooms/${encodeURIComponent(classroomId)}/recording-plan?${qs.toString()}`;
-    const res = await fetchJson('academic-integration', url, {}, this.timeoutMs);
+    const res = await fetchJson(
+      'academic-integration',
+      url,
+      { headers: internalHeaders(this.options.internalToken) },
+      this.timeoutMs,
+    );
     if (!res.ok)
       throw new UpstreamError(
         'academic-integration',
@@ -136,17 +156,23 @@ export class HttpScheduleClient implements ScheduleClient {
 }
 
 export class HttpAuditClient implements AuditClient {
+  private readonly timeoutMs: number;
   constructor(
     private readonly baseUrl: string,
     private readonly log: FastifyBaseLogger,
-    private readonly timeoutMs = 3000,
-  ) {}
+    private readonly options: HttpClientOptions = {},
+  ) {
+    this.timeoutMs = options.timeoutMs ?? 3000;
+  }
 
   async record(event: AuditEventInput): Promise<void> {
     try {
       const res = await fetch(`${this.baseUrl}/v1/audit-events`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: {
+          'content-type': 'application/json',
+          ...internalHeaders(this.options.internalToken),
+        },
         body: JSON.stringify(event),
         signal: AbortSignal.timeout(this.timeoutMs),
       });
@@ -155,6 +181,102 @@ export class HttpAuditClient implements AuditClient {
     } catch (err) {
       this.log.warn({ err, action: event.action }, 'audit service unreachable; event not recorded');
     }
+  }
+}
+
+/**
+ * Integration stage §2: `POST {EVENT_BUS_URL}/v1/topics/{type}:publish` with the envelope as JSON.
+ * Throws on failure; callers log (publishing never fails the request that produced the event).
+ */
+export class HttpEventBusPublisher implements EventPublisher {
+  constructor(
+    private readonly baseUrl: string,
+    private readonly options: HttpClientOptions = {},
+  ) {}
+
+  async publish(event: PlatformEvent): Promise<void> {
+    const url = `${this.baseUrl.replace(/\/+$/, '')}/v1/topics/${encodeURIComponent(event.type)}:publish`;
+    const res = await fetchJson(
+      'event-bus',
+      url,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...internalHeaders(this.options.internalToken),
+        },
+        body: JSON.stringify(event),
+      },
+      this.options.timeoutMs ?? 5000,
+    );
+    if (!res.ok)
+      throw new UpstreamError('event-bus', res.status, `event bus returned ${res.status}`);
+  }
+}
+
+/**
+ * Google Pub/Sub over REST (no SDK): topic = event type, data = base64(envelope). Uses the
+ * metadata-server access token on GCP, or `PUBSUB_EMULATOR_HOST` (no auth) locally.
+ */
+export class PubSubRestPublisher implements EventPublisher {
+  private token: { value: string; expiresAt: number } | undefined;
+
+  constructor(
+    private readonly projectId: string,
+    private readonly options: {
+      emulatorHost?: string | undefined;
+      fetchToken?: () => Promise<{ access_token: string; expires_in: number }>;
+      timeoutMs?: number;
+    } = {},
+  ) {}
+
+  private async accessToken(): Promise<string | undefined> {
+    if (this.options.emulatorHost) return undefined;
+    if (this.token && this.token.expiresAt > Date.now() + 60_000) return this.token.value;
+    const fetchToken =
+      this.options.fetchToken ??
+      (async (): Promise<{ access_token: string; expires_in: number }> => {
+        const res = await fetchJson(
+          'gcp-metadata',
+          'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token',
+          { headers: { 'Metadata-Flavor': 'Google' } },
+          3000,
+        );
+        if (!res.ok) throw new UpstreamError('gcp-metadata', res.status, 'no access token');
+        return (await res.json()) as { access_token: string; expires_in: number };
+      });
+    const t = await fetchToken();
+    this.token = { value: t.access_token, expiresAt: Date.now() + t.expires_in * 1000 };
+    return t.access_token;
+  }
+
+  async publish(event: PlatformEvent): Promise<void> {
+    const base = this.options.emulatorHost
+      ? `http://${this.options.emulatorHost}`
+      : 'https://pubsub.googleapis.com';
+    const topic = encodeURIComponent(event.type);
+    const token = await this.accessToken();
+    const res = await fetchJson(
+      'pubsub',
+      `${base}/v1/projects/${encodeURIComponent(this.projectId)}/topics/${topic}:publish`,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...(token ? { authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          messages: [
+            {
+              data: Buffer.from(JSON.stringify(event), 'utf8').toString('base64'),
+              attributes: { type: event.type, eventId: event.eventId, source: event.source },
+            },
+          ],
+        }),
+      },
+      this.options.timeoutMs ?? 5000,
+    );
+    if (!res.ok) throw new UpstreamError('pubsub', res.status, `pubsub returned ${res.status}`);
   }
 }
 

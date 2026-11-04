@@ -54,7 +54,11 @@ import {
   unauthorized,
 } from './errors.js';
 import { deriveHealth } from './health.js';
-import { InMemoryDeviceRepository, type DeviceRepository } from './repository.js';
+import {
+  InMemoryDeviceRepository,
+  RepositoryConflictError,
+  type DeviceRepository,
+} from './repository.js';
 import {
   AssignDevice,
   CommandCancel,
@@ -75,6 +79,7 @@ import {
   RegisterDevice,
   RevokeDevice,
 } from './schemas.js';
+import { createInternalGuard } from './internal-auth.js';
 import { createDeviceAuthHook } from './signature.js';
 
 export interface Clock {
@@ -96,6 +101,8 @@ export interface BuildAppOptions {
   deps: Partial<DeviceManagementDeps> & Pick<DeviceManagementDeps, 'organization' | 'schedule'>;
   /** When set, admin routes require `Authorization: Bearer <adminToken>`. */
   adminToken?: string;
+  /** When set, `/internal/*` routes (incl. the status sweep) require `x-internal-token`. */
+  internalToken?: string;
   certificateValidityDays?: number;
   heartbeatRetention?: number;
   /** Nominal firmware heartbeat interval, used for missed-heartbeat counts (default 60 s). */
@@ -147,6 +154,10 @@ export function buildApp(options: BuildAppOptions): DeviceManagementApp {
       }) as unknown as FastifyInstance)
     : Fastify({ logger: options.logger ?? false, bodyLimit: 256 * 1024 });
   registerErrorHandler(app);
+  const requireInternal = createInternalGuard(options.internalToken);
+  app.addHook('onRequest', async (request) => {
+    if (request.url.startsWith('/internal/')) await requireInternal(request);
+  });
 
   // Keep the raw body: device signatures cover the exact bytes sent.
   app.addContentTypeParser(
@@ -330,10 +341,6 @@ export function buildApp(options: BuildAppOptions): DeviceManagementApp {
 
     // Re-provisioning a revoked/decommissioned unit keeps its device id and history.
     const deviceId = previous?.id ?? deps.idGenerator();
-    if (!(await repo.consumeToken(token.id, now.toISOString(), deviceId))) {
-      throw unauthorized('provisioning_token_used', 'Provisioning token was already used');
-    }
-
     const issuedAt = now.toISOString();
     const expiresAt = new Date(now.getTime() + certificateValidityDays * 86_400_000).toISOString();
     const certificatePayload = {
@@ -365,7 +372,9 @@ export function buildApp(options: BuildAppOptions): DeviceManagementApp {
       createdAt: previous?.createdAt ?? issuedAt,
       updatedAt: issuedAt,
     };
-    await repo.saveDevice(device);
+    if (!(await repo.registerDevice(token.id, now.toISOString(), device))) {
+      throw unauthorized('provisioning_token_used', 'Provisioning token was already used');
+    }
 
     await audit({
       tenantId: token.institutionId,
@@ -446,7 +455,6 @@ export function buildApp(options: BuildAppOptions): DeviceManagementApp {
 
     const actor = actorOf(request) ?? 'system';
     const ts = nowIso();
-    if (current) await repo.saveAssignment({ ...current, unassignedAt: ts, unassignedBy: actor });
     const assignment = {
       id: deps.idGenerator(),
       deviceId: id,
@@ -455,8 +463,18 @@ export function buildApp(options: BuildAppOptions): DeviceManagementApp {
       assignedAt: ts,
       assignedBy: actor,
     };
-    await repo.saveAssignment(assignment);
-    await repo.saveDevice({ ...device, classroomId, updatedAt: ts });
+    try {
+      await repo.applyAssignment({
+        device: { ...device, classroomId, updatedAt: ts },
+        ...(current ? { close: { ...current, unassignedAt: ts, unassignedBy: actor } } : {}),
+        open: assignment,
+      });
+    } catch (err) {
+      if (err instanceof RepositoryConflictError) {
+        throw conflict('classroom_occupied', 'Classroom already has an active capture device');
+      }
+      throw err;
+    }
 
     await audit({
       tenantId: device.institutionId,
@@ -485,12 +503,10 @@ export function buildApp(options: BuildAppOptions): DeviceManagementApp {
     const current = await repo.getActiveAssignment(id);
     if (!current) throw conflict('device_unassigned', 'Device has no active assignment');
     const ts = nowIso();
-    await repo.saveAssignment({
-      ...current,
-      unassignedAt: ts,
-      unassignedBy: actorOf(request) ?? 'system',
+    await repo.applyAssignment({
+      device: { ...omit(device, ['classroomId']), updatedAt: ts },
+      close: { ...current, unassignedAt: ts, unassignedBy: actorOf(request) ?? 'system' },
     });
-    await repo.saveDevice({ ...omit(device, ['classroomId']), updatedAt: ts });
     await audit({
       tenantId: device.institutionId,
       actorId: actorOf(request),
@@ -542,12 +558,6 @@ export function buildApp(options: BuildAppOptions): DeviceManagementApp {
     const device = await requireDevice(id);
     const ts = nowIso();
     const active = await repo.getActiveAssignment(id);
-    if (active)
-      await repo.saveAssignment({
-        ...active,
-        unassignedAt: ts,
-        unassignedBy: actorOf(request) ?? 'system',
-      });
     const updated: Device = {
       ...omit(device, ['classroomId']),
       credentialStatus: 'decommissioned',
@@ -555,7 +565,12 @@ export function buildApp(options: BuildAppOptions): DeviceManagementApp {
       revokedAt: device.revokedAt ?? ts,
       updatedAt: ts,
     };
-    await repo.saveDevice(updated);
+    await repo.applyAssignment({
+      device: updated,
+      ...(active
+        ? { close: { ...active, unassignedAt: ts, unassignedBy: actorOf(request) ?? 'system' } }
+        : {}),
+    });
     await audit({
       tenantId: device.institutionId,
       actorId: actorOf(request),
@@ -798,7 +813,16 @@ export function buildApp(options: BuildAppOptions): DeviceManagementApp {
       expiresAt: new Date(now.getTime() + body.ttlMinutes * 60_000).toISOString(),
       deliveryCount: 0,
     };
-    await repo.saveCommand(command);
+    // The repository re-checks atomically (concurrent requests for the same type).
+    const stored = await repo.createCommand(command);
+    if (!stored.created) {
+      return reply.status(202).send({
+        commandId: stored.command.id,
+        status: stored.command.status,
+        expiresAt: stored.command.expiresAt,
+        deduplicated: true,
+      });
+    }
     await audit({
       tenantId: device.institutionId,
       actorId: body.requestedBy,

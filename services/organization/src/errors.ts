@@ -39,6 +39,26 @@ export function registerErrorHandler(app: FastifyInstance): void {
         },
       });
     }
+    const pgCode = (err as { code?: unknown; severity?: unknown }).severity
+      ? (err as { code?: unknown }).code
+      : undefined;
+    if (pgCode === '23505' || pgCode === '23503' || pgCode === '22P02') {
+      // Database constraint backstops (the service validates first; these cover races).
+      const mapped =
+        pgCode === '23505'
+          ? { status: 409, code: 'conflict', message: 'Conflicting change; retry' }
+          : pgCode === '23503'
+            ? {
+                status: 422,
+                code: 'invalid_reference',
+                message: 'Referenced record does not exist',
+              }
+            : { status: 400, code: 'invalid_value', message: 'Invalid identifier or value' };
+      request.log.warn({ err }, 'database constraint rejected the request');
+      return reply
+        .status(mapped.status)
+        .send({ error: { code: mapped.code, message: mapped.message } });
+    }
     const status =
       typeof err.statusCode === 'number' && err.statusCode >= 400 ? err.statusCode : 500;
     if (status >= 500) request.log.error(err);
@@ -55,3 +75,6 @@ export function registerErrorHandler(app: FastifyInstance): void {
     }),
   );
 }
+
+export const unauthorized = (code: string, message: string): AppError =>
+  new AppError(401, code, message);

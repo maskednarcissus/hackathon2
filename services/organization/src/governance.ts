@@ -102,7 +102,7 @@ export async function computeConsentStatus(
     );
   }
 
-  const consents = await ctx.repo.consents.list((c) => c.policyId === policy.id && !c.supersededAt);
+  const consents = await ctx.repo.consents.list((c) => !c.supersededAt, { policyId: policy.id });
   const prof = roster.professorIds.map((id) =>
     effectiveConsent(consents, 'professor', id, policy.id, classSectionId),
   );
@@ -160,13 +160,10 @@ export function registerGovernanceRoutes(app: FastifyInstance, ctx: ServiceConte
       (c) =>
         !c.supersededAt &&
         c.subjectType === body.subjectType &&
-        c.subjectId === body.subjectId &&
-        c.policyId === body.policyId &&
         c.classSectionId === body.classSectionId,
+      { subjectId: body.subjectId, policyId: body.policyId },
     );
-    for (const p of previous)
-      await repo.consents.save({ ...p, supersededAt: ts, supersededBy: consent.id });
-    await repo.consents.save(consent);
+    await repo.recordConsent(consent, previous);
     await ctx.recordAudit({
       tenantId: policy.institutionId,
       actorId: body.actorId,
@@ -189,12 +186,14 @@ export function registerGovernanceRoutes(app: FastifyInstance, ctx: ServiceConte
 
   app.get('/v1/consents', async (request) => {
     const q = ConsentQuery.parse(request.query);
+    const scope = {
+      ...(q.policyId ? { policyId: q.policyId } : {}),
+      ...(q.classSectionId ? { classSectionId: q.classSectionId } : {}),
+      ...(q.subjectId ? { subjectId: q.subjectId } : {}),
+    };
     const items = await repo.consents.list(
-      (c) =>
-        (!q.policyId || c.policyId === q.policyId) &&
-        (!q.classSectionId || c.classSectionId === q.classSectionId) &&
-        (!q.subjectId || c.subjectId === q.subjectId) &&
-        (q.includeHistory === true || !c.supersededAt),
+      (c) => q.includeHistory === true || !c.supersededAt,
+      scope,
     );
     return { items: items.sort((a, b) => b.recordedAt.localeCompare(a.recordedAt)) };
   });
@@ -287,9 +286,8 @@ export function registerGovernanceRoutes(app: FastifyInstance, ctx: ServiceConte
   app.get('/v1/legal-holds', async (request) => {
     const q = LegalHoldQuery.parse(request.query);
     const items = await repo.legalHolds.list(
-      (h) =>
-        h.institutionId === q.institutionId &&
-        (q.active === undefined || q.active === (h.releasedAt === undefined)),
+      (h) => q.active === undefined || q.active === (h.releasedAt === undefined),
+      { institutionId: q.institutionId },
     );
     return { items: items.sort((a, b) => b.createdAt.localeCompare(a.createdAt)) };
   });

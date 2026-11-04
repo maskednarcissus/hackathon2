@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import Fastify, {
   type FastifyBaseLogger,
   type FastifyInstance,
+  type FastifyRequest,
   type FastifyServerOptions,
 } from 'fastify';
 import {
@@ -24,6 +25,7 @@ import {
   type RecordingPolicyVersion,
 } from './domain.js';
 import { computeConsentStatus, registerGovernanceRoutes } from './governance.js';
+import { createInternalGuard, tokenMatches } from './internal-auth.js';
 import { registerRetentionRoutes } from './retention.js';
 import { AppError, conflict, notFound, registerErrorHandler } from './errors.js';
 import { createInMemoryOrganizationRepository, type OrganizationRepository } from './repository.js';
@@ -60,6 +62,12 @@ export interface BuildAppOptions {
   logger?: FastifyServerOptions['logger'];
   /** Pre-built pino logger (takes precedence over `logger`). */
   loggerInstance?: FastifyBaseLogger;
+  /**
+   * When set, scheduler endpoints (`POST /v1/retention/run`) and `/internal/*` require
+   * `x-internal-token` — or `Authorization: Bearer <adminToken>` for the admin console.
+   */
+  internalToken?: string;
+  adminToken?: string;
 }
 
 /** Removes keys whose value is undefined; turns null into "delete the field". */
@@ -79,6 +87,21 @@ function stripUndefined<T extends object>(obj: T): Defined<T> {
   return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined)) as Defined<T>;
 }
 
+/** Internal token (scheduler / services) or the admin bearer token (administration console). */
+function createSchedulerGuard(
+  internalToken: string | undefined,
+  adminToken: string | undefined,
+): (request: FastifyRequest) => Promise<void> {
+  const internal = createInternalGuard(internalToken);
+  return (request) => {
+    const auth = request.headers.authorization;
+    if (adminToken && auth?.startsWith('Bearer ') && tokenMatches(auth.slice(7), adminToken)) {
+      return Promise.resolve();
+    }
+    return internal(request);
+  };
+}
+
 export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   const deps: OrganizationDeps = {
     repo: options.deps?.repo ?? createInMemoryOrganizationRepository(),
@@ -93,6 +116,10 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     ? (Fastify({ loggerInstance: options.loggerInstance }) as unknown as FastifyInstance)
     : Fastify({ logger: options.logger ?? false });
   registerErrorHandler(app);
+  const requireInternal = createInternalGuard(options.internalToken);
+  app.addHook('onRequest', async (request) => {
+    if (request.url.startsWith('/internal/')) await requireInternal(request);
+  });
 
   const now = (): string => clock.now().toISOString();
 
@@ -147,41 +174,39 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
       POLICY_CONTENT_FIELDS.filter((f) => p[f] !== undefined).map((f) => [f, p[f]]),
     ) as PolicyContent;
 
-  const createVersion = async (
+  const buildVersion = (
     policy: Omit<RecordingPolicy, 'currentVersion' | 'currentVersionId'>,
     version: number,
     changedFields: RecordingPolicyVersion['changedFields'],
     createdBy: string | null,
     changeReason: string | undefined,
-  ): Promise<RecordingPolicyVersion> => {
-    const record: RecordingPolicyVersion = {
-      id: deps.idGenerator(),
-      policyId: policy.id,
-      institutionId: policy.institutionId,
-      version,
-      content: contentOf({ ...policy, currentVersion: version, currentVersionId: '' }),
-      changedFields,
-      ...(changeReason ? { changeReason } : {}),
-      createdBy,
-      createdAt: now(),
-    };
-    await repo.recordingPolicyVersions.save(record);
-    await ctx.recordAudit({
-      tenantId: policy.institutionId,
-      actorId: createdBy,
-      actorType: createdBy ? 'admin' : 'system',
+  ): RecordingPolicyVersion => ({
+    id: deps.idGenerator(),
+    policyId: policy.id,
+    institutionId: policy.institutionId,
+    version,
+    content: contentOf({ ...policy, currentVersion: version, currentVersionId: '' }),
+    changedFields,
+    ...(changeReason ? { changeReason } : {}),
+    createdBy,
+    createdAt: now(),
+  });
+
+  const auditVersion = (record: RecordingPolicyVersion): Promise<void> =>
+    ctx.recordAudit({
+      tenantId: record.institutionId,
+      actorId: record.createdBy,
+      actorType: record.createdBy ? 'admin' : 'system',
       action: 'recording_policy.version_created',
       resourceType: 'recording_policy',
-      resourceId: policy.id,
+      resourceId: record.policyId,
       metadata: {
-        version,
+        version: record.version,
         versionId: record.id,
-        changedFields,
-        changeReason: changeReason ?? null,
+        changedFields: record.changedFields,
+        changeReason: record.changeReason ?? null,
       },
     });
-    return record;
-  };
 
   /** A policy referenced by a campus/classroom must belong to the same institution (tenant isolation). */
   const assertPolicyInInstitution = async (
@@ -298,8 +323,10 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     await requireInstitution(id);
     const campuses = await repo.campuses.list((c) => c.institutionId === id);
     if (campuses.length > 0) throw conflict('has_children', 'Institution still has campuses');
-    for (const p of await repo.recordingPolicies.list((p) => p.institutionId === id))
-      await repo.recordingPolicies.delete(p.id);
+    // Policies have immutable versions (and recordings reference them): never deleted.
+    const policies = await repo.recordingPolicies.list(undefined, { institutionId: id });
+    if (policies.length > 0)
+      throw conflict('has_children', 'Institution has recording policies (kept for governance)');
     await repo.institutions.delete(id);
     return reply.status(204).send();
   });
@@ -517,14 +544,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   });
 
   // ---------------------------------------------------------------- recording policies
-  /** Only one default policy per institution: setting a new default clears the previous one. */
-  const clearOtherDefaults = async (institutionId: string, keepId: string): Promise<void> => {
-    for (const p of await repo.recordingPolicies.list(
-      (p) => p.institutionId === institutionId && p.isDefault && p.id !== keepId,
-    )) {
-      await repo.recordingPolicies.save({ ...p, isDefault: false, updatedAt: now() });
-    }
-  };
+  // Only one default policy per institution: `commitPolicy` clears the previous default.
 
   app.post('/v1/institutions/:id/recording-policies', async (request, reply) => {
     const { id } = IdParams.parse(request.params);
@@ -547,16 +567,10 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
       createdAt: ts,
       updatedAt: ts,
     });
-    const version = await createVersion(
-      draft,
-      1,
-      [...POLICY_CONTENT_FIELDS],
-      actorId ?? null,
-      'created',
-    );
+    const version = buildVersion(draft, 1, [...POLICY_CONTENT_FIELDS], actorId ?? null, 'created');
     const item: RecordingPolicy = { ...draft, currentVersion: 1, currentVersionId: version.id };
-    await repo.recordingPolicies.save(item);
-    if (item.isDefault) await clearOtherDefaults(id, item.id);
+    await repo.commitPolicy({ policy: item, version });
+    await auditVersion(version);
     return reply.status(201).send(item);
   });
   app.get('/v1/institutions/:id/recording-policies', async (request) => {
@@ -590,9 +604,10 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     }
     let next: RecordingPolicy = { ...applyPatch(current, fields), updatedAt: now() };
     const changedFields = POLICY_CONTENT_FIELDS.filter((f) => next[f] !== current[f]);
+    let version: RecordingPolicyVersion | undefined;
     if (changedFields.length > 0) {
       // Policies are versioned: recordings keep pointing at the version that was in force.
-      const version = await createVersion(
+      version = buildVersion(
         next,
         current.currentVersion + 1,
         changedFields,
@@ -601,24 +616,24 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
       );
       next = { ...next, currentVersion: version.version, currentVersionId: version.id };
     }
-    const saved = await repo.recordingPolicies.save(next);
-    if (saved.isDefault) await clearOtherDefaults(saved.institutionId, saved.id);
-    return saved;
+    await repo.commitPolicy({ policy: next, ...(version ? { version } : {}) });
+    if (version) await auditVersion(version);
+    return next;
   });
 
   app.get('/v1/recording-policies/:id/versions', async (request) => {
     const { id } = IdParams.parse(request.params);
     await requirePolicy(id);
-    const items = await repo.recordingPolicyVersions.list((v) => v.policyId === id);
+    const items = await repo.recordingPolicyVersions.list(undefined, { policyId: id });
     return { items: items.sort((a, b) => b.version - a.version) };
   });
 
   app.get('/v1/recording-policies/:id/versions/:version', async (request) => {
     const { id, version } = VersionParams.parse(request.params);
     await requirePolicy(id);
-    const [item] = await repo.recordingPolicyVersions.list(
-      (v) => v.policyId === id && v.version === version,
-    );
+    const [item] = await repo.recordingPolicyVersions.list((v) => v.version === version, {
+      policyId: id,
+    });
     if (!item) throw notFound('Recording policy version', `${id}@${version}`);
     return item;
   });
@@ -631,7 +646,11 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   });
 
   registerGovernanceRoutes(app, ctx);
-  registerRetentionRoutes(app, ctx);
+  registerRetentionRoutes(
+    app,
+    ctx,
+    createSchedulerGuard(options.internalToken, options.adminToken),
+  );
 
   return app;
 }

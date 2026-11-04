@@ -15,10 +15,23 @@ export interface DeviceRepository {
 
   saveToken(token: ProvisioningToken): Promise<void>;
   findTokenByHash(tokenHash: string): Promise<ProvisioningToken | undefined>;
-  /** Atomically marks a token as used; returns false if it was already used (prevents replay races). */
-  consumeToken(tokenId: string, usedAt: string, deviceId: string): Promise<boolean>;
+  /**
+   * Atomically consumes a provisioning token and creates/updates the device. Returns false (and
+   * changes nothing) when the token was already used — prevents replay races.
+   */
+  registerDevice(tokenId: string, usedAt: string, device: Device): Promise<boolean>;
 
   saveAssignment(assignment: DeviceAssignment): Promise<void>;
+  /**
+   * Closes `close`, opens `open` and saves `device` as one unit. Throws `RepositoryConflictError`
+   * when another device is already active in the classroom or the device already has an open
+   * assignment.
+   */
+  applyAssignment(change: {
+    device: Device;
+    close?: DeviceAssignment;
+    open?: DeviceAssignment;
+  }): Promise<void>;
   getActiveAssignment(deviceId: string): Promise<DeviceAssignment | undefined>;
   listAssignments(deviceId: string): Promise<DeviceAssignment[]>;
 
@@ -29,12 +42,25 @@ export interface DeviceRepository {
   listHeartbeatsSince(deviceId: string, since: string): Promise<Heartbeat[]>;
 
   saveCommand(command: DeviceCommand): Promise<void>;
+  /** Inserts unless an open (pending/delivered) command of the same type exists for the device. */
+  createCommand(command: DeviceCommand): Promise<{ command: DeviceCommand; created: boolean }>;
   getCommand(id: string): Promise<DeviceCommand | undefined>;
   /** Newest first. */
   listCommands(
     filter: { deviceId?: string; statuses?: readonly CommandStatus[] },
     limit?: number,
   ): Promise<DeviceCommand[]>;
+}
+
+/** A uniqueness invariant (classroom occupancy, open assignment, open command) was violated. */
+export class RepositoryConflictError extends Error {
+  constructor(
+    public readonly constraint: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'RepositoryConflictError';
+  }
 }
 
 const clone = <T>(v: T): T => structuredClone(v);
@@ -79,12 +105,49 @@ export class InMemoryDeviceRepository implements DeviceRepository {
     const t = [...this.tokens.values()].find((x) => x.tokenHash === tokenHash);
     return Promise.resolve(t ? clone(t) : undefined);
   }
-  consumeToken(tokenId: string, usedAt: string, deviceId: string): Promise<boolean> {
+  registerDevice(tokenId: string, usedAt: string, device: Device): Promise<boolean> {
     const t = this.tokens.get(tokenId);
     if (!t || t.usedAt) return Promise.resolve(false);
     t.usedAt = usedAt;
-    t.deviceId = deviceId;
+    t.deviceId = device.id;
+    this.devices.set(device.id, clone(device));
     return Promise.resolve(true);
+  }
+
+  applyAssignment(change: {
+    device: Device;
+    close?: DeviceAssignment;
+    open?: DeviceAssignment;
+  }): Promise<void> {
+    const { device, close, open } = change;
+    if (device.classroomId && device.credentialStatus === 'active') {
+      const other = [...this.devices.values()].find(
+        (d) =>
+          d.id !== device.id &&
+          d.classroomId === device.classroomId &&
+          d.credentialStatus === 'active',
+      );
+      if (other)
+        return Promise.reject(
+          new RepositoryConflictError(
+            'uq_capture_devices_active_classroom',
+            'Classroom already has an active capture device',
+          ),
+        );
+    }
+    if (open) {
+      const stillOpen = [...this.assignments.values()].find(
+        (a) => a.deviceId === open.deviceId && !a.unassignedAt && a.id !== close?.id,
+      );
+      if (stillOpen)
+        return Promise.reject(
+          new RepositoryConflictError('uq_device_assignments_open', 'Device already assigned'),
+        );
+    }
+    if (close) this.assignments.set(close.id, clone(close));
+    if (open) this.assignments.set(open.id, clone(open));
+    this.devices.set(device.id, clone(device));
+    return Promise.resolve();
   }
 
   saveAssignment(assignment: DeviceAssignment): Promise<void> {
@@ -133,6 +196,17 @@ export class InMemoryDeviceRepository implements DeviceRepository {
   saveCommand(command: DeviceCommand): Promise<void> {
     this.commands.set(command.id, clone(command));
     return Promise.resolve();
+  }
+  createCommand(command: DeviceCommand): Promise<{ command: DeviceCommand; created: boolean }> {
+    const existing = [...this.commands.values()].find(
+      (c) =>
+        c.deviceId === command.deviceId &&
+        c.type === command.type &&
+        (c.status === 'pending' || c.status === 'delivered'),
+    );
+    if (existing) return Promise.resolve({ command: clone(existing), created: false });
+    this.commands.set(command.id, clone(command));
+    return Promise.resolve({ command: clone(command), created: true });
   }
   getCommand(id: string): Promise<DeviceCommand | undefined> {
     const c = this.commands.get(id);

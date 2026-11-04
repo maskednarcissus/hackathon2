@@ -17,18 +17,23 @@ export interface AuditClient {
   record(event: AuditEventInput): Promise<void>;
 }
 
+/** Sent as `x-internal-token` on every service-to-service call (integration stage §4). */
+const internalHeaders = (token: string | undefined): Record<string, string> =>
+  token ? { 'x-internal-token': token } : {};
+
 export class HttpAuditClient implements AuditClient {
   constructor(
     private readonly baseUrl: string,
     private readonly log: FastifyBaseLogger,
     private readonly timeoutMs = 3000,
+    private readonly internalToken?: string,
   ) {}
 
   async record(event: AuditEventInput): Promise<void> {
     try {
       const res = await fetch(`${this.baseUrl}/v1/audit-events`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', ...internalHeaders(this.internalToken) },
         body: JSON.stringify(event),
         signal: AbortSignal.timeout(this.timeoutMs),
       });
@@ -91,13 +96,14 @@ export class HttpRosterClient implements RosterClient {
   constructor(
     private readonly baseUrl: string,
     private readonly timeoutMs = 5000,
+    private readonly internalToken?: string,
   ) {}
 
   async getRoster(classSectionId: string): Promise<SectionRoster | null> {
     const res = await call(
       'academic-integration',
       `${this.baseUrl}/v1/class-sections/${encodeURIComponent(classSectionId)}/roster`,
-      {},
+      { headers: internalHeaders(this.internalToken) },
       this.timeoutMs,
     );
     if (res.status === 404) return null;
@@ -162,6 +168,7 @@ export class HttpRetentionTarget implements RetentionTarget {
     private readonly baseUrl: string,
     readonly kinds: readonly RetentionKind[],
     private readonly timeoutMs = 30_000,
+    private readonly internalToken?: string,
   ) {}
 
   async candidates(query: {
@@ -173,7 +180,7 @@ export class HttpRetentionTarget implements RetentionTarget {
     const res = await call(
       this.name,
       `${this.baseUrl}/internal/v1/retention/candidates?${qs.toString()}`,
-      {},
+      { headers: internalHeaders(this.internalToken) },
       this.timeoutMs,
     );
     if (!res.ok)
@@ -188,7 +195,7 @@ export class HttpRetentionTarget implements RetentionTarget {
       `${this.baseUrl}/internal/v1/retention/delete`,
       {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', ...internalHeaders(this.internalToken) },
         body: JSON.stringify(request),
       },
       this.timeoutMs,

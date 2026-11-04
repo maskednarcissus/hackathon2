@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { RetentionCandidate, RetentionTarget } from './clients.js';
 import type { ServiceContext } from './context.js';
 import {
@@ -71,17 +71,9 @@ export async function runRetention(
 ): Promise<RetentionJob> {
   const { repo } = ctx;
   await ctx.requireInstitution(input.institutionId);
-  const running = await repo.retentionJobs.list(
-    (j) => j.institutionId === input.institutionId && j.status === 'running',
-  );
-  if (running.length > 0)
-    throw conflict('retention_job_running', 'A retention job is already running', {
-      jobId: running[0]?.id,
-    });
-
-  const policies = await repo.recordingPolicies.list(
-    (p) => p.institutionId === input.institutionId,
-  );
+  const policies = await repo.recordingPolicies.list(undefined, {
+    institutionId: input.institutionId,
+  });
   const defaultPolicy = policies.find((p) => p.isDefault);
   if (!defaultPolicy)
     throw new AppError(422, 'no_recording_policy', 'Institution has no default recording policy');
@@ -89,9 +81,9 @@ export async function runRetention(
   const ref = input.referenceTime.getTime();
   const holds = await repo.legalHolds.list(
     (h) =>
-      h.institutionId === input.institutionId &&
       Date.parse(h.createdAt) <= ref &&
       (h.releasedAt === undefined || Date.parse(h.releasedAt) > ref),
+    { institutionId: input.institutionId },
   );
 
   const job: RetentionJob = {
@@ -110,7 +102,15 @@ export async function runRetention(
     unconfiguredKinds: [],
     errors: [],
   };
-  await repo.retentionJobs.save(job);
+  // The lock: one running job per institution (unique partial index in Postgres).
+  if (!(await repo.startRetentionJob(job))) {
+    const [running] = await repo.retentionJobs.list((j) => j.status === 'running', {
+      institutionId: input.institutionId,
+    });
+    throw conflict('retention_job_running', 'A retention job is already running', {
+      jobId: running?.id,
+    });
+  }
   const holdsApplied = new Set<string>();
 
   const audit = (
@@ -221,8 +221,12 @@ export async function runRetention(
   return job;
 }
 
-export function registerRetentionRoutes(app: FastifyInstance, ctx: ServiceContext): void {
-  app.post('/v1/retention/run', async (request, reply) => {
+export function registerRetentionRoutes(
+  app: FastifyInstance,
+  ctx: ServiceContext,
+  requireScheduler: (request: FastifyRequest) => Promise<void> = () => Promise.resolve(),
+): void {
+  app.post('/v1/retention/run', { preHandler: requireScheduler }, async (request, reply) => {
     const body = RetentionRun.parse(request.body);
     const current = ctx.clock.now();
     if (body.now && !body.dryRun && Date.parse(body.now) > current.getTime() + 60_000) {
@@ -241,7 +245,8 @@ export function registerRetentionRoutes(app: FastifyInstance, ctx: ServiceContex
   app.get('/v1/retention/jobs', async (request) => {
     const q = RetentionJobsQuery.parse(request.query);
     const items = await ctx.repo.retentionJobs.list(
-      (j) => !q.institutionId || j.institutionId === q.institutionId,
+      undefined,
+      q.institutionId ? { institutionId: q.institutionId } : {},
     );
     return {
       items: items.sort((a, b) => b.startedAt.localeCompare(a.startedAt)).slice(0, q.limit),

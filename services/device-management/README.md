@@ -93,3 +93,21 @@ delivered command even after expiry; never-delivered commands, cancelled ones an
 results get `409`. An identical retried result is idempotent (`200`).
 Audit actions: `device.command_issued`, `device.command_completed`, `device.command_expired`,
 `device.command_cancelled`.
+
+## Integration stage — persistence, events, internal auth
+
+| Variable                                       | Effect                                                                                                                                                                 |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                                 | Postgres (`src/repository.pg.ts`) instead of the in-memory repository. Schema: `data/migrations/V*.sql` + `pending/device-management.sql`; the service never runs DDL. |
+| `EVENT_BUS_URL`                                | publish events to `POST {EVENT_BUS_URL}/v1/topics/{type}:publish` (envelope JSON, `x-internal-token`)                                                                  |
+| `PUBSUB_PROJECT_ID` (+ `PUBSUB_EMULATOR_HOST`) | publish to Google Pub/Sub over REST (metadata-server token) when no bus URL is set                                                                                     |
+| `INTERNAL_API_TOKEN`                           | required as `x-internal-token` on `/internal/*` (public-key lookup, `POST /internal/v1/status-sweep` for Cloud Scheduler); also sent on outbound calls                 |
+| `STATUS_SWEEP_INTERVAL_MS`                     | in-process sweep (default 30 s); `0` when Cloud Scheduler drives the sweep                                                                                             |
+
+Atomic operations in Postgres: token consume + device upsert (`UPDATE … WHERE used_at IS NULL`),
+assignment changes (row lock + `uq_capture_devices_active_classroom` / `uq_device_assignments_open`,
+conflict → `409 classroom_occupied`), command creation (`ON CONFLICT … DO NOTHING` on
+`uq_device_commands_open_type` → the existing open command is returned). Constraint backstops map to
+`409 conflict` / `422 invalid_reference`.
+
+Postgres suite: `TEST_DATABASE_URL=postgresql://… pnpm test` (creates and drops `ci_test_<random>`).

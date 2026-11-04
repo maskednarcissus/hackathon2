@@ -112,3 +112,18 @@ Other audit actions: `recording_policy.version_created`, `consent.recorded`, `co
 | `AUDIT_URL`                                                                                               | `http://localhost:4011`               |
 | `ACADEMIC_INTEGRATION_URL`                                                                                | `http://localhost:4003` (roster)      |
 | `AUDIO_INGESTION_URL` / `TRANSCRIPT_MANAGEMENT_URL` / `LECTURE_INTELLIGENCE_URL` / `EVENT_EXTRACTION_URL` | `:8001` / `:4008` / `:8006` / `:8007` |
+
+## Integration stage — persistence & internal auth
+
+| Variable                     | Effect                                                                                                                                                                                                                            |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`               | Postgres (`src/repository.pg.ts`). Schema: `data/migrations/V*.sql` + `pending/organization.sql`; no DDL at start-up.                                                                                                             |
+| `INTERNAL_API_TOKEN`         | `POST /v1/retention/run` (Cloud Scheduler, daily 04:00) and `/internal/*` require `x-internal-token`; the admin console may use `Authorization: Bearer $ADMIN_API_TOKEN` instead. Sent on calls to audit, roster and data owners. |
+| `RETENTION_TARGETS_DISABLED` | comma-separated data owners to skip (e.g. while one is not deployed)                                                                                                                                                              |
+
+Atomic operations: policy + version commit (per-institution advisory lock, default switch, deferred
+`current_version_id` FK), consent supersede + insert (`uq_recording_consents_current`), retention job
+lock (`INSERT … ON CONFLICT (institution_id) WHERE status = 'running' DO NOTHING` → `409`).
+Institutions that have recording policies can no longer be deleted (versions are append-only).
+
+Postgres suite: `TEST_DATABASE_URL=postgresql://… pnpm test`.

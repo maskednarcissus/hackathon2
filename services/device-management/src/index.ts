@@ -1,15 +1,21 @@
+import pino from 'pino';
 import { buildApp } from './app.js';
 import {
   HttpAuditClient,
+  HttpEventBusPublisher,
   HttpOrganizationClient,
   HttpScheduleClient,
   LoggingEventPublisher,
+  PubSubRestPublisher,
+  type EventPublisher,
 } from './clients.js';
 import { loadDeviceCa } from './crypto.js';
-import pino from 'pino';
+import { InMemoryDeviceRepository, type DeviceRepository } from './repository.js';
+import { PgDeviceRepository, createPool } from './repository.pg.js';
 
 const env = process.env;
 const log = pino({ level: env['LOG_LEVEL'] ?? 'info' });
+const internalToken = env['INTERNAL_API_TOKEN'] || undefined;
 
 const ca = loadDeviceCa(env['DEVICE_CA_PRIVATE_KEY_PEM']);
 if (ca.ephemeral) {
@@ -23,24 +29,64 @@ if (ca.ephemeral) {
 }
 if (!env['ADMIN_API_TOKEN'])
   log.warn('ADMIN_API_TOKEN not set: admin routes are unauthenticated (development only)');
+if (!internalToken)
+  log.warn('INTERNAL_API_TOKEN not set: /internal/* routes are open (development only)');
+
+// Persistence (integration stage §1): DATABASE_URL → Postgres, otherwise in-memory.
+const pool = env['DATABASE_URL'] ? createPool(env['DATABASE_URL']) : undefined;
+const repo: DeviceRepository = pool ? new PgDeviceRepository(pool) : new InMemoryDeviceRepository();
+if (!pool)
+  log.warn('DATABASE_URL not set: using the in-memory repository (data is lost on restart)');
+
+// Event bus (§2): EVENT_BUS_URL → HTTP bus, PUBSUB_PROJECT_ID → Pub/Sub, else log only.
+let events: EventPublisher;
+if (env['EVENT_BUS_URL']) {
+  events = new HttpEventBusPublisher(env['EVENT_BUS_URL'], { internalToken });
+} else if (env['PUBSUB_PROJECT_ID']) {
+  events = new PubSubRestPublisher(env['PUBSUB_PROJECT_ID'], {
+    emulatorHost: env['PUBSUB_EMULATOR_HOST'],
+  });
+} else {
+  events = new LoggingEventPublisher(log);
+}
 
 const service = buildApp({
   loggerInstance: log,
   ...(env['ADMIN_API_TOKEN'] ? { adminToken: env['ADMIN_API_TOKEN'] } : {}),
+  ...(internalToken ? { internalToken } : {}),
   deps: {
     ca,
-    organization: new HttpOrganizationClient(env['ORGANIZATION_URL'] ?? 'http://localhost:4002'),
-    schedule: new HttpScheduleClient(env['ACADEMIC_INTEGRATION_URL'] ?? 'http://localhost:4003'),
-    audit: new HttpAuditClient(env['AUDIT_URL'] ?? 'http://localhost:4011', log),
-    events: new LoggingEventPublisher(log),
+    repo,
+    organization: new HttpOrganizationClient(env['ORGANIZATION_URL'] ?? 'http://localhost:4002', {
+      internalToken,
+    }),
+    schedule: new HttpScheduleClient(env['ACADEMIC_INTEGRATION_URL'] ?? 'http://localhost:4003', {
+      internalToken,
+    }),
+    audit: new HttpAuditClient(env['AUDIT_URL'] ?? 'http://localhost:4011', log, { internalToken }),
+    events,
   },
 });
 
+// In-process sweep; set STATUS_SWEEP_INTERVAL_MS=0 when Cloud Scheduler calls
+// POST /internal/v1/status-sweep instead (integration stage §6).
 const sweepIntervalMs = Number(env['STATUS_SWEEP_INTERVAL_MS'] ?? 30_000);
-const timer = setInterval(() => {
-  service.sweepStatuses().catch((err: unknown) => log.error({ err }, 'status sweep failed'));
-}, sweepIntervalMs);
-timer.unref();
+if (sweepIntervalMs > 0) {
+  const timer = setInterval(() => {
+    service.sweepStatuses().catch((err: unknown) => log.error({ err }, 'status sweep failed'));
+  }, sweepIntervalMs);
+  timer.unref();
+}
+
+const shutdown = (): void => {
+  service.app
+    .close()
+    .then(() => pool?.end())
+    .catch((err: unknown) => log.error({ err }, 'shutdown failed'))
+    .finally(() => process.exit(0));
+};
+process.once('SIGTERM', shutdown);
+process.once('SIGINT', shutdown);
 
 service.app
   .listen({ port: Number(env['PORT'] ?? 4004), host: env['HOST'] ?? '0.0.0.0' })

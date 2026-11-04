@@ -10,7 +10,7 @@ import {
   type ScheduleClient,
 } from '../clients.js';
 import { loadDeviceCa } from '../crypto.js';
-import { InMemoryDeviceRepository } from '../repository.js';
+import { InMemoryDeviceRepository, type DeviceRepository } from '../repository.js';
 import { signDeviceRequest } from '../signature.js';
 
 export const INSTITUTION_A = '11111111-1111-4111-8111-111111111111';
@@ -95,18 +95,22 @@ export interface Harness extends DeviceManagementApp {
   clock: MutableClock;
   audit: InMemoryAuditClient;
   events: InMemoryEventPublisher;
-  repo: InMemoryDeviceRepository;
+  repo: DeviceRepository;
   schedule: FakeScheduleClient;
 }
 
-export function createHarness(options: { maxOpenCommandsPerDevice?: number } = {}): Harness {
+export function createHarness(
+  options: { maxOpenCommandsPerDevice?: number; repo?: DeviceRepository } = {},
+): Harness {
   const clock = new MutableClock();
   const audit = new InMemoryAuditClient();
   const events = new InMemoryEventPublisher();
-  const repo = new InMemoryDeviceRepository();
+  const repo = options.repo ?? new InMemoryDeviceRepository();
   const schedule = new FakeScheduleClient();
   const built = buildApp({
-    ...options,
+    ...(options.maxOpenCommandsPerDevice !== undefined
+      ? { maxOpenCommandsPerDevice: options.maxOpenCommandsPerDevice }
+      : {}),
     adminToken: ADMIN_TOKEN,
     deps: {
       clock,
