@@ -1,4 +1,5 @@
 import { createPublicKey, randomUUID } from 'node:crypto';
+import pg from 'pg';
 import pino from 'pino';
 import { HttpAuditClient, InMemoryAuditClient } from './audit-client.js';
 import { buildApp, createDefaultDeps, DEFAULT_CONFIG } from './app.js';
@@ -11,7 +12,9 @@ import {
 } from './dsr.js';
 import { KeyStore, loadSigningKey } from './keys.js';
 import { hashPassword } from './password.js';
-import { createInMemoryRepositories } from './repositories.js';
+import { createInMemoryRepositories, type Repositories } from './repositories.js';
+import { createPgRepositories, GraceCipher, PgDsrRepository } from './repository.pg.js';
+import type { DsrRepository } from './dsr.js';
 import { systemClock } from './tokens.js';
 
 const logger = pino({ name: 'identity' });
@@ -30,7 +33,35 @@ async function main(): Promise<void> {
     .filter((chunk) => chunk.length > 0)
     .map((chunk) => createPublicKey(`${chunk.replace(/\\n/g, '\n')}\n-----END PUBLIC KEY-----\n`));
 
-  const repos = createInMemoryRepositories();
+  // Integration stage §1: DATABASE_URL → Postgres, otherwise in-memory (dev/tests).
+  const databaseUrl = env['DATABASE_URL'];
+  let repos: Repositories;
+  let dsrRepo: DsrRepository;
+  if (databaseUrl) {
+    const pool = new pg.Pool({
+      connectionString: databaseUrl,
+      max: Number(env['PG_POOL_MAX'] ?? 10),
+    });
+    const graceKey = env['IDENTITY_GRACE_KEY'];
+    const graceCipher = graceKey
+      ? new GraceCipher(Buffer.from(graceKey, 'base64'))
+      : GraceCipher.fromSigningKey(key.privateKey);
+    repos = createPgRepositories(pool, { graceCipher });
+    dsrRepo = new PgDsrRepository(pool);
+    logger.info('using PostgreSQL repositories');
+  } else {
+    repos = createInMemoryRepositories();
+    dsrRepo = new InMemoryDsrRepository();
+    logger.warn('DATABASE_URL is not set: using in-memory repositories (data is lost on restart)');
+  }
+
+  // Integration stage §4: one shared secret per environment; IDENTITY_INTERNAL_TOKEN kept as an alias.
+  const internalToken = env['INTERNAL_API_TOKEN'] ?? env['IDENTITY_INTERNAL_TOKEN'];
+  if (!internalToken) {
+    logger.warn(
+      'INTERNAL_API_TOKEN is not set: service-to-service calls must use an admin bearer token',
+    );
+  }
   const auditUrl = env['AUDIT_SERVICE_URL'];
   const deps = createDefaultDeps({
     repos,
@@ -40,13 +71,12 @@ async function main(): Promise<void> {
     config: {
       ...DEFAULT_CONFIG,
       issuer: env['IDENTITY_ISSUER'] ?? DEFAULT_CONFIG.issuer,
-      internalToken: env['IDENTITY_INTERNAL_TOKEN'],
+      internalToken,
     },
     dsr: {
-      repo: new InMemoryDsrRepository(),
+      repo: dsrRepo,
       handlers: parseHandlerUrls(env['DSR_HANDLER_URLS']).map(
-        ({ name, url }) =>
-          new HttpDataSubjectHandler(name, url, { internalToken: env['IDENTITY_INTERNAL_TOKEN'] }),
+        ({ name, url }) => new HttpDataSubjectHandler(name, url, { internalToken }),
       ),
       exportStore: env['DSR_EXPORT_DIR']
         ? new FileSystemExportStore(env['DSR_EXPORT_DIR'])
@@ -59,7 +89,11 @@ async function main(): Promise<void> {
   const bootstrapEmail = env['IDENTITY_BOOTSTRAP_ADMIN_EMAIL'];
   const bootstrapPassword = env['IDENTITY_BOOTSTRAP_ADMIN_PASSWORD'];
   const bootstrapInstitution = env['IDENTITY_BOOTSTRAP_INSTITUTION_ID'];
-  if (bootstrapEmail && bootstrapPassword && bootstrapInstitution) {
+  const alreadyBootstrapped =
+    bootstrapEmail && bootstrapInstitution
+      ? await repos.users.findByEmail(bootstrapInstitution, bootstrapEmail)
+      : undefined;
+  if (bootstrapEmail && bootstrapPassword && bootstrapInstitution && !alreadyBootstrapped) {
     const now = new Date();
     const id = randomUUID();
     await repos.users.create({

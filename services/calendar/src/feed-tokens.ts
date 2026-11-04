@@ -10,6 +10,8 @@ export interface FeedTokenRepository {
   /** Replaces any previous token of the student (rotation invalidates the old one). */
   put(record: FeedTokenRecord): Promise<void>;
   get(studentId: string): Promise<FeedTokenRecord | undefined>;
+  /** Removes the student's token (DSR deletion); returns whether one existed. */
+  delete(studentId: string): Promise<boolean>;
 }
 
 export class InMemoryFeedTokenRepository implements FeedTokenRepository {
@@ -20,6 +22,9 @@ export class InMemoryFeedTokenRepository implements FeedTokenRepository {
   async get(studentId: string): Promise<FeedTokenRecord | undefined> {
     const t = this.tokens.get(studentId);
     return t ? { ...t } : undefined;
+  }
+  async delete(studentId: string): Promise<boolean> {
+    return this.tokens.delete(studentId);
   }
 }
 

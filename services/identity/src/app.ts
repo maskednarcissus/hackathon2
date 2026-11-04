@@ -37,7 +37,12 @@ import {
   verifyPassword,
   type ScryptParams,
 } from './password.js';
-import { createInMemoryRepositories, type Repositories, type UserRecord } from './repositories.js';
+import {
+  createInMemoryRepositories,
+  SecretReferenceRequiredError,
+  type Repositories,
+  type UserRecord,
+} from './repositories.js';
 import { systemClock, TokenService, type Clock } from './tokens.js';
 
 export interface IdentityConfig {
@@ -202,7 +207,13 @@ const OidcConfigSchema = z.object({
   tokenEndpoint: z.string().url(),
   jwksUri: z.string().url(),
   clientId: z.string().min(1),
+  /** Plain secret: in-memory/dev only. Production uses `clientSecretRef` (e.g. `env:SSO_SECRET_X`). */
   clientSecret: z.string().min(1).nullable().optional(),
+  clientSecretRef: z
+    .string()
+    .regex(/^(none|env:[A-Z][A-Z0-9_]*|sm:\/\/.+)$/, 'Expected none, env:NAME or sm://…')
+    .nullable()
+    .optional(),
   redirectUri: z.string().url(),
   scopes: z.array(z.string().min(1)).default(['openid', 'email', 'profile']),
 });
@@ -654,19 +665,27 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       throw forbidden('Cross-institution access denied', 'cross_institution');
     const now = clock.now();
     const existing = await repos.oidcConfigs.get(institutionId);
-    await repos.oidcConfigs.save({
-      institutionId,
-      issuer: body.issuer,
-      authorizationEndpoint: body.authorizationEndpoint,
-      tokenEndpoint: body.tokenEndpoint,
-      jwksUri: body.jwksUri,
-      clientId: body.clientId,
-      clientSecret: body.clientSecret ?? null,
-      redirectUri: body.redirectUri,
-      scopes: body.scopes.includes('openid') ? body.scopes : ['openid', ...body.scopes],
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now,
-    });
+    try {
+      await repos.oidcConfigs.save({
+        institutionId,
+        issuer: body.issuer,
+        authorizationEndpoint: body.authorizationEndpoint,
+        tokenEndpoint: body.tokenEndpoint,
+        jwksUri: body.jwksUri,
+        clientId: body.clientId,
+        clientSecret: body.clientSecret ?? null,
+        clientSecretRef: body.clientSecretRef ?? null,
+        redirectUri: body.redirectUri,
+        scopes: body.scopes.includes('openid') ? body.scopes : ['openid', ...body.scopes],
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      });
+    } catch (err) {
+      if (err instanceof SecretReferenceRequiredError) {
+        throw new AppError(400, 'secret_reference_required', err.message);
+      }
+      throw err;
+    }
     return {
       institutionId,
       issuer: body.issuer,

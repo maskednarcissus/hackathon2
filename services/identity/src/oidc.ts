@@ -1,10 +1,12 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { createJwksKeyResolver, JwtError, verifyJwt, type KeyResolver } from './jwt-verify.js';
-import type {
-  OidcConfigRepository,
-  OidcProviderConfig,
-  OidcStateRepository,
+import {
+  envSecretResolver,
+  type OidcConfigRepository,
+  type OidcProviderConfig,
+  type OidcStateRepository,
+  type SecretResolver,
 } from './repositories.js';
 import type { Clock } from './tokens.js';
 
@@ -52,6 +54,8 @@ export interface OidcDeps {
   /** Optional shared key resolver cache keyed by JWKS URI. */
   keyResolverFor?: (jwksUri: string) => KeyResolver;
   stateTtlSeconds?: number;
+  /** Resolves `clientSecretRef` values; defaults to `env:NAME` lookup. */
+  resolveSecret?: SecretResolver;
   clockSkewSeconds?: number;
 }
 
@@ -228,7 +232,13 @@ export function createOidcProviderRegistry(
   return {
     async forInstitution(institutionId: string): Promise<IdentityProvider | undefined> {
       const config = await configs.get(institutionId);
-      return config ? new OidcIdentityProvider(config, { ...deps, keyResolverFor }) : undefined;
+      if (!config) return undefined;
+      const clientSecret =
+        config.clientSecret ??
+        (config.clientSecretRef
+          ? (deps.resolveSecret ?? envSecretResolver)(config.clientSecretRef)
+          : null);
+      return new OidcIdentityProvider({ ...config, clientSecret }, { ...deps, keyResolverFor });
     },
   };
 }

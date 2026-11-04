@@ -109,6 +109,19 @@ rotation works by publishing the new key while keeping the old one in `IDENTITY_
 | `DSR_EXPORT_DIR`                                                                     | —             | Directory for access-request bundles; unset → in-memory                        |
 | `IDENTITY_BOOTSTRAP_ADMIN_EMAIL` / `_PASSWORD` / `IDENTITY_BOOTSTRAP_INSTITUTION_ID` | —             | Creates a first admin at start-up                                              |
 
+## Integration stage (Postgres, internal token)
+
+- `DATABASE_URL` set → `src/repository.pg.ts` (all repositories + `PgDsrRepository`); unset → in-memory.
+  Refresh rotation runs in one transaction with `SELECT … FOR UPDATE` on the token row, so concurrent refreshes on
+  different replicas serialise; the 10 s grace pair is stored AES-256-GCM-sealed in `refresh_token_grace`
+  (key `IDENTITY_GRACE_KEY` base64 32 bytes, else HKDF of the signing key). OIDC client secrets are stored only as
+  references (`clientSecretRef`: `env:NAME` / `none`; plaintext is rejected with `secret_reference_required`).
+- `INTERNAL_API_TOKEN` (alias `IDENTITY_INTERNAL_TOKEN`) is accepted as `x-internal-token` on sync/authorize/DSR
+  calls and sent to DSR handlers. identity publishes no bus events.
+- Schema gaps: `data/migrations/pending/identity.sql`.
+- `TEST_DATABASE_URL=postgresql://ci@/postgres?host=/var/tmp/cipg&port=5433 pnpm test` also runs
+  `src/identity.pg.test.ts` against a fresh database with every migration applied.
+
 ## Development
 
 ```bash

@@ -38,7 +38,14 @@ export interface TestContext {
 
 export async function createUser(
   deps: AppDeps,
-  input: { institutionId: string; role: Role; email?: string; password?: string | null },
+  input: {
+    institutionId: string;
+    role: Role;
+    email?: string;
+    password?: string | null;
+    /** studentId / professorId to link (must exist as a students/professors row in Postgres). */
+    personId?: string;
+  },
 ): Promise<UserRecord> {
   const now = deps.clock.now();
   const user: UserRecord = {
@@ -49,8 +56,8 @@ export async function createUser(
     ).toLowerCase(),
     name: `Test ${input.role}`,
     role: input.role,
-    studentId: input.role === 'student' ? randomUUID() : null,
-    professorId: input.role === 'professor' ? randomUUID() : null,
+    studentId: input.role === 'student' ? (input.personId ?? randomUUID()) : null,
+    professorId: input.role === 'professor' ? (input.personId ?? randomUUID()) : null,
     status: 'active',
     createdAt: now,
     updatedAt: now,
@@ -68,9 +75,19 @@ export async function createUser(
   return user;
 }
 
+export type PersonFactory = (
+  institutionId: string,
+  kind: 'student' | 'professor',
+) => Promise<string>;
+
 export async function setup(
-  overrides: Partial<Omit<AppDeps, 'clock'>> & { clock?: MutableClock } = {},
+  input: Partial<Omit<AppDeps, 'clock'>> & {
+    clock?: MutableClock;
+    personFactory?: PersonFactory;
+  } = {},
 ): Promise<TestContext> {
+  const { personFactory, ...overrides } = input;
+  const person = personFactory ?? (async (): Promise<string> => randomUUID());
   const clock = overrides.clock ?? new MutableClock();
   const audit = new InMemoryAuditClient();
   const deps = createDefaultDeps({
@@ -88,9 +105,21 @@ export async function setup(
 
   const users = {
     admin: await createUser(deps, { institutionId: INSTITUTION_A, role: 'admin' }),
-    student: await createUser(deps, { institutionId: INSTITUTION_A, role: 'student' }),
-    otherStudent: await createUser(deps, { institutionId: INSTITUTION_A, role: 'student' }),
-    professor: await createUser(deps, { institutionId: INSTITUTION_A, role: 'professor' }),
+    student: await createUser(deps, {
+      institutionId: INSTITUTION_A,
+      role: 'student',
+      personId: await person(INSTITUTION_A, 'student'),
+    }),
+    otherStudent: await createUser(deps, {
+      institutionId: INSTITUTION_A,
+      role: 'student',
+      personId: await person(INSTITUTION_A, 'student'),
+    }),
+    professor: await createUser(deps, {
+      institutionId: INSTITUTION_A,
+      role: 'professor',
+      personId: await person(INSTITUTION_A, 'professor'),
+    }),
     coordinator: await createUser(deps, { institutionId: INSTITUTION_A, role: 'coordinator' }),
     adminB: await createUser(deps, { institutionId: INSTITUTION_B, role: 'admin' }),
   };

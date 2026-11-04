@@ -64,6 +64,11 @@ export interface OidcProviderConfig {
   clientId: string;
   /** Resolved secret value (from Secret Manager in production). */
   clientSecret: string | null;
+  /**
+   * Reference to the secret (`env:NAME`, `none`, or a Secret Manager reference). Postgres stores only the
+   * reference, never the secret; it is resolved when the provider is built.
+   */
+  clientSecretRef: string | null;
   redirectUri: string;
   scopes: string[];
   createdAt: Date;
@@ -99,7 +104,39 @@ export interface CredentialRepository {
   delete(userId: string): Promise<boolean>;
 }
 
+export interface IssuedSession {
+  accessToken: string;
+  refreshToken: string;
+  expiresIn: number;
+}
+
+/** Successor pair kept for the refresh grace window only (encrypted at rest in Postgres). */
+export interface GraceEntry {
+  successorId: string;
+  session: IssuedSession;
+  expiresAt: Date;
+}
+
+/** Operations available while a refresh token row is locked. */
+export interface RefreshTokenTx {
+  create(record: RefreshTokenRecord): Promise<void>;
+  update(record: RefreshTokenRecord): Promise<void>;
+  findById(id: string): Promise<RefreshTokenRecord | undefined>;
+  revokeFamily(familyId: string, at: Date): Promise<number>;
+  putGrace(previousTokenId: string, entry: GraceEntry): Promise<void>;
+  getGrace(previousTokenId: string, now: Date): Promise<GraceEntry | undefined>;
+  deleteGrace(previousTokenId: string): Promise<void>;
+}
+
 export interface RefreshTokenRepository {
+  /**
+   * Runs `fn` with the token row (by hash) locked until `fn` resolves; every write in `fn` goes through
+   * `tx` and commits atomically. Calls for the same token are serialised.
+   */
+  withLockedToken<T>(
+    tokenHash: string,
+    fn: (record: RefreshTokenRecord | undefined, tx: RefreshTokenTx) => Promise<T>,
+  ): Promise<T>;
   create(record: RefreshTokenRecord): Promise<void>;
   update(record: RefreshTokenRecord): Promise<void>;
   findByHash(tokenHash: string): Promise<RefreshTokenRecord | undefined>;
@@ -215,6 +252,39 @@ class InMemoryCredentials implements CredentialRepository {
 
 class InMemoryRefreshTokens implements RefreshTokenRepository {
   private readonly items = new Map<string, RefreshTokenRecord>();
+  private readonly grace = new Map<string, GraceEntry>();
+  private readonly locks = new Map<string, Promise<unknown>>();
+
+  async withLockedToken<T>(
+    tokenHash: string,
+    fn: (record: RefreshTokenRecord | undefined, tx: RefreshTokenTx) => Promise<T>,
+  ): Promise<T> {
+    const previous = this.locks.get(tokenHash) ?? Promise.resolve();
+    const run = previous
+      .catch(() => undefined)
+      .then(async () => fn(await this.findByHash(tokenHash), this));
+    const tail = run.catch(() => undefined);
+    this.locks.set(tokenHash, tail);
+    try {
+      return await run;
+    } finally {
+      if (this.locks.get(tokenHash) === tail) this.locks.delete(tokenHash);
+    }
+  }
+  async putGrace(previousTokenId: string, entry: GraceEntry): Promise<void> {
+    for (const [key, value] of this.grace) {
+      if (value.expiresAt.getTime() < entry.expiresAt.getTime() - 60_000) this.grace.delete(key);
+    }
+    this.grace.set(previousTokenId, clone(entry));
+  }
+  async getGrace(previousTokenId: string, now: Date): Promise<GraceEntry | undefined> {
+    const entry = this.grace.get(previousTokenId);
+    if (!entry || entry.expiresAt.getTime() < now.getTime()) return undefined;
+    return clone(entry);
+  }
+  async deleteGrace(previousTokenId: string): Promise<void> {
+    this.grace.delete(previousTokenId);
+  }
   async create(record: RefreshTokenRecord): Promise<void> {
     this.items.set(record.id, clone(record));
   }
@@ -356,3 +426,22 @@ export function createInMemoryRepositories(): Repositories {
     loginEvents: new InMemoryLoginEvents(),
   };
 }
+
+/** Thrown by stores that never persist plaintext secrets (Postgres) when given one without a reference. */
+export class SecretReferenceRequiredError extends Error {
+  constructor() {
+    super(
+      'OIDC client secrets must be configured as a reference (clientSecretRef), not in plain text',
+    );
+    this.name = 'SecretReferenceRequiredError';
+  }
+}
+
+export type SecretResolver = (ref: string) => string | null;
+
+/** `none` → no secret; `env:NAME` → process.env.NAME; anything else (e.g. `sm://…`) needs a custom resolver. */
+export const envSecretResolver: SecretResolver = (ref) => {
+  if (ref === 'none') return null;
+  if (ref.startsWith('env:')) return process.env[ref.slice(4)] ?? null;
+  return null;
+};

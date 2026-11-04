@@ -19,6 +19,15 @@ export interface EventFilter {
 export interface CalendarRepository {
   insertEvent(event: CalendarEvent): Promise<void>;
   updateEvent(event: CalendarEvent): Promise<void>;
+  /**
+   * Atomically stores a new version of the event and its change records. Fails with
+   * VersionConflictError when the stored version is no longer `expectedVersion` (concurrent update).
+   */
+  updateEventWithChanges(
+    event: CalendarEvent,
+    changes: readonly CalendarEventChange[],
+    expectedVersion: number,
+  ): Promise<void>;
   getEvent(id: string): Promise<CalendarEvent | undefined>;
   findByExtractedEventId(extractedEventId: string): Promise<CalendarEvent | undefined>;
   listEvents(filter: EventFilter): Promise<CalendarEvent[]>;
@@ -42,6 +51,13 @@ export interface CalendarRepository {
   listTerms(institutionId: string): Promise<AcademicTerm[]>;
 }
 
+export class VersionConflictError extends Error {
+  constructor(readonly eventId: string) {
+    super(`Calendar event ${eventId} was modified concurrently`);
+    this.name = 'VersionConflictError';
+  }
+}
+
 const byDate = (a: CalendarEvent, b: CalendarEvent): number =>
   a.eventDate.localeCompare(b.eventDate) ||
   (a.eventTime ?? '').localeCompare(b.eventTime ?? '') ||
@@ -61,6 +77,18 @@ export class InMemoryCalendarRepository implements CalendarRepository {
 
   async updateEvent(event: CalendarEvent): Promise<void> {
     this.events.set(event.id, { ...event });
+  }
+
+  async updateEventWithChanges(
+    event: CalendarEvent,
+    changes: readonly CalendarEventChange[],
+    expectedVersion: number,
+  ): Promise<void> {
+    if (this.events.get(event.id)?.version !== expectedVersion) {
+      throw new VersionConflictError(event.id);
+    }
+    this.events.set(event.id, { ...event });
+    this.changes.push(...changes.map((c) => ({ ...c })));
   }
 
   async getEvent(id: string): Promise<CalendarEvent | undefined> {

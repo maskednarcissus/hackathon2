@@ -1,5 +1,13 @@
-import { randomUUID } from 'node:crypto';
-import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import Fastify, {
+  type FastifyInstance,
+  type FastifyReply,
+  type FastifyRequest,
+  type FastifyServerOptions,
+} from 'fastify';
+import { z } from 'zod';
+import { InMemoryEventPublisher, type EventPublisher } from './events.js';
+import { extractBearerToken, JwtError, type AccessTokenVerifier } from './jwt-verify.js';
 import { InMemoryAuditClient, type AuditClient } from './audit.js';
 import { detectConflicts } from './conflicts.js';
 import { byChangeOrder, toStudentVisible, type SectionRecord } from './domain.js';
@@ -35,8 +43,33 @@ export interface AppDeps {
   audit?: AuditClient;
   clock?: Clock;
   feedTokens?: FeedTokenRepository;
+  /** Event bus publisher (integration stage §2); defaults to in-memory. */
+  events?: EventPublisher;
+  /**
+   * INTERNAL_API_TOKEN (§4): when set, required as `x-internal-token` on /internal/* and sync endpoints.
+   * Unset → open (dev only).
+   */
+  internalToken?: string;
+  /**
+   * Identity access-token verifier (vendored jwt-verify, JWKS). When set, student routes require a bearer
+   * token whose `pid` is the student (or a coordinator/admin of the student's institution).
+   */
+  verifyAccessToken?: AccessTokenVerifier;
   logger?: FastifyServerOptions['logger'];
 }
+
+const DsrParamsSchema = z.object({
+  type: z.enum(['access', 'correction', 'deletion', 'anonymization', 'restriction']),
+});
+const DsrBodySchema = z.object({
+  subjectType: z.enum(['student', 'professor', 'user']),
+  subjectId: z.string().uuid(),
+  requestId: z.string().uuid(),
+  institutionId: z.string().uuid(),
+  details: z.record(z.unknown()).optional(),
+});
+
+const digest = (value: string): Buffer => createHash('sha256').update(value).digest();
 
 /** Feed tokens travel in the query string; never write them to logs. */
 export const redactTokens = (url: string): string =>
@@ -62,11 +95,60 @@ export function buildApp(deps: AppDeps = {}): FastifyInstance {
   const repo = deps.repository ?? new InMemoryCalendarRepository();
   const audit = deps.audit ?? new InMemoryAuditClient();
   const clock = deps.clock ?? systemClock;
-  const service = new CalendarService(repo, audit, clock);
+  const service = new CalendarService(
+    repo,
+    audit,
+    clock,
+    deps.events ?? new InMemoryEventPublisher(),
+  );
   const feedTokens = deps.feedTokens ?? new InMemoryFeedTokenRepository();
 
   const app = Fastify({ logger: withRedaction(deps.logger) });
   registerErrorHandler(app);
+  app.decorateRequest('auth', undefined);
+
+  /** §4: constant-time check of x-internal-token; open when no token is configured (dev). */
+  const internalOnly = async (req: FastifyRequest): Promise<void> => {
+    const expected = deps.internalToken;
+    if (!expected) return;
+    const provided = req.headers['x-internal-token'];
+    if (typeof provided !== 'string' || !timingSafeEqual(digest(provided), digest(expected))) {
+      throw new AppError(401, 'unauthorized', 'Valid x-internal-token required');
+    }
+  };
+
+  /** §4: student routes — the token's pid must be the student, unless staff of the student's institution. */
+  const studentAccess = async (req: FastifyRequest, _reply: FastifyReply): Promise<void> => {
+    const verify = deps.verifyAccessToken;
+    if (!verify) return;
+    const token = extractBearerToken(req.headers.authorization);
+    if (!token) throw new AppError(401, 'unauthorized', 'Bearer token required');
+    let claims;
+    try {
+      claims = await verify(token);
+    } catch (err) {
+      const code =
+        err instanceof JwtError && err.code === 'expired' ? 'token_expired' : 'invalid_token';
+      throw new AppError(401, code, 'Invalid or expired access token');
+    }
+    req.auth = claims;
+    const { studentId } = StudentParamSchema.parse(req.params);
+    if (claims.role === 'student') {
+      if (claims.pid !== studentId)
+        throw new AppError(403, 'forbidden', 'Students can only access their own calendar');
+      return;
+    }
+    if (claims.role === 'coordinator' || claims.role === 'admin') {
+      for (const sectionId of await repo.sectionsOfStudent(studentId)) {
+        const section = await repo.getSection(sectionId);
+        if (section && section.institutionId !== claims.inst) {
+          throw new AppError(403, 'cross_institution', 'Cross-institution access denied');
+        }
+      }
+      return;
+    }
+    throw new AppError(403, 'forbidden', 'Role not permitted for student calendars');
+  };
 
   app.get('/health', async () => ({ status: 'ok', service: 'calendar' }));
 
@@ -128,7 +210,7 @@ export function buildApp(deps: AppDeps = {}): FastifyInstance {
   });
 
   // ---- Reference data sync -------------------------------------------------
-  app.post('/v1/sections', async (req) => {
+  app.post('/v1/sections', { preHandler: internalOnly }, async (req) => {
     const { sections } = SectionsSyncSchema.parse(req.body);
     for (const s of sections) {
       await repo.upsertSection({
@@ -143,7 +225,7 @@ export function buildApp(deps: AppDeps = {}): FastifyInstance {
     return { upserted: sections.length };
   });
 
-  app.post('/v1/enrollments/bulk', async (req) => {
+  app.post('/v1/enrollments/bulk', { preHandler: internalOnly }, async (req) => {
     const body = EnrollmentsBulkSchema.parse(req.body);
     if (!(await repo.getSection(body.classSectionId))) {
       throw notFound('Class section', body.classSectionId);
@@ -155,7 +237,7 @@ export function buildApp(deps: AppDeps = {}): FastifyInstance {
     return { classSectionId: body.classSectionId, mode: body.mode, enrolled: total };
   });
 
-  app.post('/v1/non-teaching-days', async (req) => {
+  app.post('/v1/non-teaching-days', { preHandler: internalOnly }, async (req) => {
     const body = NonTeachingDaysSchema.parse(req.body);
     await repo.upsertNonTeachingDays(
       body.days.map((d) => ({ institutionId: body.institutionId, ...d })),
@@ -168,7 +250,7 @@ export function buildApp(deps: AppDeps = {}): FastifyInstance {
     return { items: await repo.listNonTeachingDays(institutionId) };
   });
 
-  app.post('/v1/terms', async (req, reply) => {
+  app.post('/v1/terms', { preHandler: internalOnly }, async (req, reply) => {
     const t = TermSchema.parse(req.body);
     const term = {
       id: t.id ?? randomUUID(),
@@ -206,7 +288,7 @@ export function buildApp(deps: AppDeps = {}): FastifyInstance {
   };
 
   // ---- Student view (3.8, 3.9) ----------------------------------------------
-  app.get('/v1/students/:studentId/calendar-events', async (req) => {
+  app.get('/v1/students/:studentId/calendar-events', { preHandler: studentAccess }, async (req) => {
     const { studentId } = StudentParamSchema.parse(req.params);
     const q = StudentEventsQuerySchema.parse(req.query);
     const events = await studentEvents(studentId, q);
@@ -240,23 +322,27 @@ export function buildApp(deps: AppDeps = {}): FastifyInstance {
   });
 
   // ---- ICS export (3.10) ------------------------------------------------------
-  app.post('/v1/students/:studentId/calendar-feed-token', async (req, reply) => {
-    const { studentId } = StudentParamSchema.parse(req.params);
-    const previous = await feedTokens.get(studentId);
-    const { token, tokenHash } = generateFeedToken();
-    const createdAt = clock.now().toISOString();
-    await feedTokens.put({ studentId, tokenHash, createdAt });
-    return reply
-      .status(201)
-      .header('cache-control', 'no-store')
-      .send({
-        studentId,
-        token,
-        feedPath: `/v1/students/${studentId}/calendar.ics?token=${token}`,
-        createdAt,
-        rotated: previous !== undefined,
-      });
-  });
+  app.post(
+    '/v1/students/:studentId/calendar-feed-token',
+    { preHandler: studentAccess },
+    async (req, reply) => {
+      const { studentId } = StudentParamSchema.parse(req.params);
+      const previous = await feedTokens.get(studentId);
+      const { token, tokenHash } = generateFeedToken();
+      const createdAt = clock.now().toISOString();
+      await feedTokens.put({ studentId, tokenHash, createdAt });
+      return reply
+        .status(201)
+        .header('cache-control', 'no-store')
+        .send({
+          studentId,
+          token,
+          feedPath: `/v1/students/${studentId}/calendar.ics?token=${token}`,
+          createdAt,
+          rotated: previous !== undefined,
+        });
+    },
+  );
 
   app.get('/v1/students/:studentId/calendar.ics', async (req, reply) => {
     const { studentId } = StudentParamSchema.parse(req.params);
@@ -282,6 +368,47 @@ export function buildApp(deps: AppDeps = {}): FastifyInstance {
       .header('content-disposition', 'inline; filename="calendario-academico.ics"')
       .header('cache-control', 'private, max-age=300')
       .send(body);
+  });
+
+  // ---- LGPD data subject rights (Phase 4 §6; integration §5: calendar owns the feed token) -----
+  app.post('/internal/v1/dsr/:type', { preHandler: internalOnly }, async (req) => {
+    const { type } = DsrParamsSchema.parse(req.params);
+    const body = DsrBodySchema.parse(req.body);
+    // Calendar holds personal data keyed by studentId only (the ICS feed token).
+    if (body.subjectType !== 'student') {
+      return {
+        service: 'calendar',
+        status: 'not_applicable',
+        items: { reason: 'no_student_data' },
+      };
+    }
+    if (type === 'deletion' || type === 'anonymization' || type === 'restriction') {
+      const removed = await feedTokens.delete(body.subjectId);
+      req.log.info(
+        { requestId: body.requestId, type, removed },
+        'dsr: calendar feed token processed',
+      );
+      return {
+        service: 'calendar',
+        status: 'completed',
+        items: { feedTokensRemoved: removed ? 1 : 0 },
+      };
+    }
+    if (type === 'access') {
+      const record = await feedTokens.get(body.subjectId);
+      return {
+        service: 'calendar',
+        status: 'completed',
+        items: {
+          calendarFeed: record ? { active: true, createdAt: record.createdAt } : { active: false },
+        },
+      };
+    }
+    return {
+      service: 'calendar',
+      status: 'not_applicable',
+      items: { reason: 'nothing_to_correct' },
+    };
   });
 
   return app;

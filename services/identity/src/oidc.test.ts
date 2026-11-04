@@ -107,6 +107,7 @@ beforeEach(async () => {
     jwksUri: `${ISSUER}/jwks`,
     clientId: CLIENT_ID,
     clientSecret: 'shh',
+    clientSecretRef: null,
     redirectUri: 'https://app.example/v1/auth/oidc/callback',
     scopes: ['openid', 'email'],
     createdAt: now,

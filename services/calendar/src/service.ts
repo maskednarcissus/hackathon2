@@ -9,7 +9,13 @@ import type {
   Conflict,
 } from './domain.js';
 import { AppError, notFound } from './errors.js';
-import type { CalendarRepository } from './repository.js';
+import {
+  calendarPayload,
+  envelope,
+  InMemoryEventPublisher,
+  type EventPublisher,
+} from './events.js';
+import { VersionConflictError, type CalendarRepository } from './repository.js';
 import type { CreateCalendarEventInput } from './schemas.js';
 
 export interface Clock {
@@ -45,7 +51,45 @@ export class CalendarService {
     private readonly repo: CalendarRepository,
     private readonly audit: AuditClient,
     private readonly clock: Clock,
+    private readonly events: EventPublisher = new InMemoryEventPublisher(),
   ) {}
+
+  private async emit(
+    type: 'calendar.event_published' | 'calendar.event_updated',
+    event: CalendarEvent,
+    previousVersion: number | null,
+    changes: CalendarEventChange[],
+    conflicts: Conflict[],
+  ): Promise<void> {
+    const section = await this.repo.getSection(event.classSectionId);
+    await this.events.publish(
+      envelope(
+        type,
+        event.institutionId,
+        calendarPayload(event, section, previousVersion, changes, conflicts),
+        this.clock.now(),
+      ),
+    );
+  }
+
+  private async saveVersion(
+    event: CalendarEvent,
+    changes: CalendarEventChange[],
+    expectedVersion: number,
+  ): Promise<void> {
+    try {
+      await this.repo.updateEventWithChanges(event, changes, expectedVersion);
+    } catch (err) {
+      if (err instanceof VersionConflictError) {
+        throw new AppError(
+          409,
+          'concurrent_update',
+          'The calendar event was modified concurrently; retry',
+        );
+      }
+      throw err;
+    }
+  }
 
   async publish(input: CreateCalendarEventInput): Promise<PublishResult> {
     const nowIso = this.clock.now().toISOString();
@@ -85,7 +129,19 @@ export class CalendarService {
         eventDate: event.eventDate,
         eventTime: event.eventTime ?? undefined,
       });
-      await this.repo.insertEvent(event);
+      try {
+        await this.repo.insertEvent(event);
+      } catch (err) {
+        // Postgres: unique extracted_event_id lost a race with a concurrent first publish.
+        if (err instanceof VersionConflictError) {
+          throw new AppError(
+            409,
+            'concurrent_update',
+            'The calendar event was published concurrently; retry',
+          );
+        }
+        throw err;
+      }
       await this.audit.record({
         tenantId: event.institutionId,
         ...(input.changedBy !== undefined ? { actorId: input.changedBy } : {}),
@@ -104,6 +160,7 @@ export class CalendarService {
           conflictKinds: conflicts.map((c) => c.kind),
         },
       });
+      await this.emit('calendar.event_published', event, null, [], conflicts);
       return { event, created: true, changes: [], conflicts };
     }
 
@@ -162,8 +219,7 @@ export class CalendarService {
       updatedAt: nowIso,
     };
     const conflicts = await this.conflictsFor(updated);
-    await this.repo.updateEvent(updated);
-    await this.repo.appendChanges(changes);
+    await this.saveVersion(updated, changes, existing.version);
     await this.audit.record({
       tenantId: updated.institutionId,
       ...(input.changedBy !== undefined ? { actorId: input.changedBy } : {}),
@@ -180,6 +236,7 @@ export class CalendarService {
         changedFields: changes.map((c) => c.field),
       },
     });
+    await this.emit('calendar.event_updated', updated, existing.version, changes, conflicts);
     return { event: updated, created: false, changes, conflicts };
   }
 
@@ -211,8 +268,7 @@ export class CalendarService {
       newValue: 'cancelled',
       reason,
     };
-    await this.repo.updateEvent(updated);
-    await this.repo.appendChanges([change]);
+    await this.saveVersion(updated, [change], existing.version);
     await this.audit.record({
       tenantId: updated.institutionId,
       actorId,
@@ -222,6 +278,7 @@ export class CalendarService {
       resourceId: id,
       metadata: { version: updated.version, changedFields: ['status'], status: 'cancelled' },
     });
+    await this.emit('calendar.event_updated', updated, existing.version, [change], []);
     return { event: updated, change };
   }
 
