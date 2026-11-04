@@ -6,6 +6,7 @@ import asyncio
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from transcription.models import (
@@ -16,6 +17,7 @@ from transcription.models import (
     Word,
 )
 from transcription.ports import (
+    ClassContext,
     ProviderError,
     ProviderResult,
     RecognitionConfig,
@@ -95,11 +97,15 @@ class InMemoryTranscriptStore:
         provider: str,
         model: str,
         segments: list[TranscriptSegment],
+        class_section_id: str | None = None,
+        institution_id: str | None = None,
     ) -> StoredTranscript:
         transcript_id = str(uuid.uuid4())
         self.transcripts[transcript_id] = {
             "recordingSessionId": recording_session_id,
             "scheduledClassId": scheduled_class_id,
+            "classSectionId": class_section_id,
+            "institutionId": institution_id,
             "language": language,
             "processingVersion": processing_version,
             "provider": provider,
@@ -143,9 +149,26 @@ class InMemoryAuditSink:
         )
 
 
+_ACTIVE = (JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.COMPLETED)
+
+
 @dataclass
 class InMemoryJobRepository:
     jobs: dict[str, TranscriptionJob] = field(default_factory=dict)
+
+    async def create_if_absent(self, job: TranscriptionJob) -> tuple[TranscriptionJob, bool]:
+        existing = await self.find_active_for_recording(job.request.recording_session_id)
+        if existing is not None:
+            return existing, False
+        await self.save(job)
+        return job.model_copy(deep=True), True
+
+    async def claim(self, job_id: str) -> TranscriptionJob | None:
+        job = self.jobs.get(job_id)
+        if job is None or job.status is not JobStatus.QUEUED:
+            return None
+        job.status = JobStatus.RUNNING
+        return job.model_copy(deep=True)
 
     async def save(self, job: TranscriptionJob) -> None:
         self.jobs[job.job_id] = job.model_copy(deep=True)
@@ -156,10 +179,42 @@ class InMemoryJobRepository:
 
     async def find_active_for_recording(self, recording_session_id: str) -> TranscriptionJob | None:
         for job in self.jobs.values():
-            if job.request.recording_session_id == recording_session_id and job.status in (
-                JobStatus.QUEUED,
-                JobStatus.RUNNING,
-                JobStatus.COMPLETED,
-            ):
+            if job.request.recording_session_id == recording_session_id and job.status in _ACTIVE:
                 return job.model_copy(deep=True)
+        return None
+
+
+@dataclass
+class InMemoryProcessedEvents:
+    seen: set[str] = field(default_factory=set)
+
+    async def is_processed(self, event_id: str) -> bool:
+        return event_id in self.seen
+
+    async def mark_processed(self, event_id: str) -> None:
+        self.seen.add(event_id)
+
+
+@dataclass
+class StaticClassContextResolver:
+    """Resolves from fixed maps (tests / offline dev)."""
+
+    by_scheduled_class: dict[str, ClassContext] = field(default_factory=dict)
+    by_classroom: dict[str, ClassContext] = field(default_factory=dict)
+    calls: int = 0
+
+    async def resolve(
+        self,
+        *,
+        scheduled_class_id: str | None,
+        classroom_id: str | None,
+        started_at: datetime | None,
+        ended_at: datetime | None,
+        recording_session_id: str,
+    ) -> ClassContext | None:
+        self.calls += 1
+        if scheduled_class_id:
+            return self.by_scheduled_class.get(scheduled_class_id)
+        if classroom_id and started_at and ended_at:
+            return self.by_classroom.get(classroom_id)
         return None

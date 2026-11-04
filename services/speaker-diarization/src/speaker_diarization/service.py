@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 import structlog
 
 from speaker_diarization import PROCESSING_VERSION
+from speaker_diarization.adapters.memory import InMemoryTurnRepository
 from speaker_diarization.audio import AudioDecodeError, AudioLoader, decode_wav
 from speaker_diarization.engine import (
     EngineConfig,
@@ -29,7 +30,12 @@ from speaker_diarization.models import (
     TranscriptSegmentRef,
     TurnOut,
 )
-from speaker_diarization.ports import AuditSink, EventPublisher, TranscriptStoreClient
+from speaker_diarization.ports import (
+    AuditSink,
+    EventPublisher,
+    TranscriptStoreClient,
+    TurnRepository,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -54,6 +60,22 @@ def labels_from_provider(segments: list[TranscriptSegmentRef]) -> dict[int, str]
     return out
 
 
+def turns_from_segments(
+    ordered: list[TranscriptSegmentRef], by_index: dict[int, SpeakerAssignment]
+) -> list[TurnOut]:
+    """Speaker turns from labelled transcript segments (provider-tag path)."""
+    out: list[TurnOut] = []
+    for seg in ordered:
+        label = by_index[seg.segment_index].speaker_label
+        if seg.end_ms <= seg.start_ms:
+            continue
+        if out and out[-1].speaker_label == label:
+            out[-1].end_ms = max(out[-1].end_ms, seg.end_ms)
+        else:
+            out.append(TurnOut(speaker_label=label, start_ms=seg.start_ms, end_ms=seg.end_ms))
+    return out
+
+
 class DiarizationService:
     def __init__(
         self,
@@ -63,7 +85,9 @@ class DiarizationService:
         publisher: EventPublisher,
         audit: AuditSink,
         engine: EngineConfig | None = None,
+        turns: TurnRepository | None = None,
     ) -> None:
+        self._turns: TurnRepository = turns or InMemoryTurnRepository()
         self._loader = loader
         self._store = store
         self._publisher = publisher
@@ -106,7 +130,7 @@ class DiarizationService:
         method = "provider_tags"
         try:
             if labels is None:
-                method = "acoustic"
+                method = "acoustic_clustering"
                 if request.audio is None:
                     raise DiarizationError("no provider speaker tags and no audio supplied")
                 cfg = self._engine
@@ -144,24 +168,31 @@ class DiarizationService:
             for s in ordered
         ]
         speaker_count = len(rename)
+        if turns:
+            turn_out = [
+                TurnOut(speaker_label=rename[t.speaker], start_ms=t.start_ms, end_ms=t.end_ms)
+                for t in turns
+                if t.speaker in rename and t.end_ms > t.start_ms
+            ]
+        else:
+            turn_out = turns_from_segments(ordered, {a.segment_index: a for a in assignments})
         result = DiarizationResult(
             transcript_id=resource,
             method=method,
             speaker_count=speaker_count,
             assignments=assignments,
-            turns=[
-                TurnOut(
-                    speaker_label=rename.get(t.speaker, t.speaker),
-                    start_ms=t.start_ms,
-                    end_ms=t.end_ms,
-                )
-                for t in turns
-                if t.speaker in rename
-            ],
+            turns=turn_out,
             processing_version=PROCESSING_VERSION,
             completed_at=datetime.now(UTC),
         )
-        await self._store.put_speakers(resource, assignments, speaker_count)
+        await self._turns.replace(resource, turn_out, PROCESSING_VERSION)
+        await self._store.put_speakers(
+            resource,
+            assignments,
+            speaker_count,
+            method=method,
+            processing_version=PROCESSING_VERSION,
+        )
         data: dict[str, object] = {"transcriptId": resource, "speakerCount": speaker_count}
         if request.recording_session_id:
             data["recordingSessionId"] = request.recording_session_id
@@ -181,6 +212,9 @@ class DiarizationService:
         log.info("diarization.completed", transcript_id=resource, speakers=speaker_count)
         return result
 
+    async def turns(self, transcript_id: str) -> list[TurnOut]:
+        return await self._turns.list(transcript_id)
+
     async def diarize_transcription(
         self,
         *,
@@ -192,7 +226,15 @@ class DiarizationService:
         """Handle ``transcription.completed``: fetch segments, then diarize."""
         segments = await self._store.get_segments(transcript_id)
         if not segments:
-            raise DiarizationError(f"transcript {transcript_id} has no segments")
+            reason = f"transcript {transcript_id} has no segments"
+            await self._audit.record(
+                action="diarization.failed",
+                resource_type="transcript",
+                resource_id=transcript_id,
+                institution_id=institution_id,
+                metadata={"reason": reason},
+            )
+            raise DiarizationError(reason)
         return await self.diarize(
             DiarizationRequest(
                 transcript_id=transcript_id,

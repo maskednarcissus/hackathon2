@@ -21,6 +21,8 @@ from transcription.models import (
 )
 from transcription.ports import (
     AuditSink,
+    ClassContext,
+    ClassContextResolver,
     EventPublisher,
     JobRepository,
     ProviderError,
@@ -28,8 +30,9 @@ from transcription.ports import (
     SpeechProvider,
     TranscriptStoreClient,
     TransientProviderError,
+    VocabularySource,
 )
-from transcription.vocabulary import VocabularyCatalog
+from transcription.vocabulary import StaticVocabularySource, VocabularyCatalog
 
 log = structlog.get_logger(__name__)
 
@@ -66,7 +69,8 @@ class TranscriptionService:
         publisher: EventPublisher,
         audit: AuditSink,
         jobs: JobRepository,
-        vocabulary: VocabularyCatalog | None = None,
+        vocabulary: VocabularySource | VocabularyCatalog | None = None,
+        class_context: ClassContextResolver | None = None,
         settings: ServiceSettings | None = None,
         sleep: Sleep = asyncio.sleep,
     ) -> None:
@@ -75,7 +79,12 @@ class TranscriptionService:
         self._publisher = publisher
         self._audit = audit
         self._jobs = jobs
-        self._vocabulary = vocabulary or VocabularyCatalog()
+        self._vocabulary: VocabularySource = (
+            StaticVocabularySource(vocabulary)
+            if vocabulary is None or isinstance(vocabulary, VocabularyCatalog)
+            else vocabulary
+        )
+        self._class_context = class_context
         self._settings = settings or ServiceSettings()
         self._sleep = sleep
 
@@ -85,9 +94,6 @@ class TranscriptionService:
         Returns ``(job, created)``; idempotent so Pub/Sub redelivery does not
         transcribe a recording twice.
         """
-        existing = await self._jobs.find_active_for_recording(request.recording_session_id)
-        if existing is not None:
-            return existing, False
         now = _now()
         job = TranscriptionJob(
             job_id=str(uuid.uuid4()),
@@ -98,8 +104,7 @@ class TranscriptionService:
             provider=self._provider.name,
             model=self._provider.model,
         )
-        await self._jobs.save(job)
-        return job, True
+        return await self._jobs.create_if_absent(job)
 
     async def get(self, job_id: str) -> TranscriptionJob | None:
         return await self._jobs.get(job_id)
@@ -130,15 +135,47 @@ class TranscriptionService:
                     await self._sleep(delay)
                     attempt += 1
 
+    async def _resolve_context(self, req: TranscriptionRequest) -> TranscriptionRequest:
+        """Fill classSectionId / institutionId / discipline from academic-integration.
+
+        Best effort: a lookup failure never blocks transcription (the transcript is then
+        stored without section association and can be re-associated later)."""
+        needs = req.class_section_id is None or req.institution_id is None or not req.discipline
+        if self._class_context is None or not needs:
+            return req
+        try:
+            ctx: ClassContext | None = await self._class_context.resolve(
+                scheduled_class_id=req.scheduled_class_id,
+                classroom_id=req.classroom_id,
+                started_at=req.started_at,
+                ended_at=req.ended_at,
+                recording_session_id=req.recording_session_id,
+            )
+        except Exception as exc:  # noqa: BLE001 — degrade gracefully
+            log.warning("transcription.class_context_failed", error=str(exc))
+            return req
+        if ctx is None:
+            return req
+        return req.model_copy(
+            update={
+                "scheduled_class_id": req.scheduled_class_id or ctx.scheduled_class_id,
+                "class_section_id": req.class_section_id or ctx.class_section_id,
+                "institution_id": req.institution_id or ctx.institution_id,
+                "discipline": req.discipline or ctx.discipline,
+            }
+        )
+
     async def run(self, job_id: str) -> TranscriptionJob:
-        job = await self._jobs.get(job_id)
-        if job is None:
-            raise KeyError(job_id)
-        if job.status is not JobStatus.QUEUED:
-            return job
+        claimed = await self._jobs.claim(job_id)
+        if claimed is None:
+            existing = await self._jobs.get(job_id)
+            if existing is None:
+                raise KeyError(job_id)
+            return existing  # already running elsewhere or finished
+        job = claimed
+        job.request = await self._resolve_context(job.request)
         req = job.request
         resource = req.recording_session_id
-        job.status = JobStatus.RUNNING
         job.updated_at = _now()
         await self._jobs.save(job)
         await self._audit.record(
@@ -154,13 +191,11 @@ class TranscriptionService:
             },
         )
 
-        config = RecognitionConfig(
-            language=req.language,
-            phrases=self._vocabulary.phrases_for(req.institution_id, req.discipline),
-        )
         sem = asyncio.Semaphore(max(1, self._settings.max_concurrency))
         ordered = sorted(req.segments, key=lambda s: s.start_ms)
         try:
+            phrases, boosts = await self._vocabulary.phrases_for(req.institution_id, req.discipline)
+            config = RecognitionConfig(language=req.language, phrases=phrases, boosts=boosts)
             results = await asyncio.gather(
                 *(self._transcribe_segment(seg, config, sem) for seg in ordered)
             )
@@ -177,6 +212,8 @@ class TranscriptionService:
                 provider=job.provider,
                 model=job.model,
                 segments=segments,
+                class_section_id=req.class_section_id,
+                institution_id=req.institution_id,
             )
         except Exception as exc:  # noqa: BLE001 — every failure must be reported
             return await self._fail(job, str(exc) or exc.__class__.__name__)
@@ -195,6 +232,7 @@ class TranscriptionService:
             "recordingSessionId": req.recording_session_id,
             "transcriptId": stored.transcript_id,
             "scheduledClassId": req.scheduled_class_id,
+            "classSectionId": req.class_section_id,
             "segmentCount": len(segments),
             "language": req.language,
             "audioSegments": [s.dump() for s in ordered],

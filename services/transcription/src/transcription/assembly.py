@@ -118,11 +118,32 @@ def group_words(
             flush()
     flush()
 
-    # Guarantee the contract invariant: ordered and non-overlapping.
-    for prev, nxt in zip(segments, segments[1:], strict=False):
-        if nxt.start_ms < prev.end_ms:
-            prev.end_ms = nxt.start_ms
+    _enforce_invariants(segments)
     return segments
+
+
+def _enforce_invariants(segments: list[TranscriptSegment]) -> None:
+    """Contract §8 / transcript-management validation: segments ordered, non-overlapping,
+    ``endMs > startMs``, and every word inside its segment."""
+    for i, seg in enumerate(segments):
+        if i > 0:
+            prev = segments[i - 1]
+            if seg.start_ms < prev.end_ms:
+                if seg.start_ms > prev.start_ms:
+                    prev.end_ms = seg.start_ms
+                else:
+                    seg.start_ms = prev.end_ms
+        if seg.end_ms <= seg.start_ms:
+            seg.end_ms = seg.start_ms + 1
+    for i, seg in enumerate(segments):
+        if i + 1 < len(segments) and seg.end_ms > segments[i + 1].start_ms:
+            seg.end_ms = max(seg.start_ms + 1, segments[i + 1].start_ms)
+        clamped: list[Word] = []
+        for w in seg.words:
+            start = min(max(w.start_ms, seg.start_ms), seg.end_ms)
+            end = min(max(w.end_ms, start), seg.end_ms)
+            clamped.append(w.model_copy(update={"start_ms": start, "end_ms": end}))
+        seg.words = clamped
 
 
 def assemble_transcript(

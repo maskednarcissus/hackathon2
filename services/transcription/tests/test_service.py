@@ -6,17 +6,27 @@ from transcription.fakes import (
     InMemoryJobRepository,
     InMemoryPublisher,
     InMemoryTranscriptStore,
+    StaticClassContextResolver,
 )
 from transcription.models import AudioSegmentRef, JobStatus, TranscriptionRequest
+from transcription.ports import ClassContext, ClassContextResolver
 from transcription.service import RetryPolicy, ServiceSettings, TranscriptionService
 from transcription.vocabulary import VocabularyCatalog
 
 FIVE_MIN = 5 * 60 * 1000
 INSTITUTION = "11111111-1111-4111-8111-111111111111"
+RECORDING = "44444444-4444-4444-8444-444444444444"
+SCHEDULED = "33333333-3333-4333-8333-333333333333"
+SECTION = "22222222-2222-4222-8222-222222222222"
 
 
 class Harness:
-    def __init__(self, provider: FakeSpeechProvider, max_concurrency: int = 4) -> None:
+    def __init__(
+        self,
+        provider: FakeSpeechProvider,
+        max_concurrency: int = 4,
+        resolver: ClassContextResolver | None = None,
+    ) -> None:
         self.provider = provider
         self.store = InMemoryTranscriptStore()
         self.publisher = InMemoryPublisher()
@@ -39,14 +49,15 @@ class Harness:
                 max_concurrency=max_concurrency,
                 retry=RetryPolicy(max_attempts=3, base_delay_s=1.0),
             ),
+            class_context=resolver,
             sleep=fake_sleep,
         )
 
 
 def lecture_request(n_segments: int = 18) -> TranscriptionRequest:
     return TranscriptionRequest(
-        recording_session_id="rec-90min",
-        scheduled_class_id="class-1",
+        recording_session_id=RECORDING,
+        scheduled_class_id=SCHEDULED,
         institution_id=INSTITUTION,
         discipline="medicine",
         segments=[
@@ -88,7 +99,7 @@ async def test_ninety_minute_lecture_end_to_end() -> None:
     [event] = h.publisher.events
     assert event["type"] == "transcription.completed"
     assert event["data"]["transcriptId"] == done.transcript_id
-    assert event["data"]["recordingSessionId"] == "rec-90min"
+    assert event["data"]["recordingSessionId"] == RECORDING
     assert len(event["data"]["audioSegments"]) == 18
     assert event["institutionId"] == INSTITUTION
     assert [a["action"] for a in h.audit.records] == [
@@ -144,3 +155,46 @@ async def test_run_unknown_job_raises() -> None:
     h = Harness(FakeSpeechProvider())
     with pytest.raises(KeyError):
         await h.service.run("missing")
+
+
+async def test_class_context_fills_section_institution_and_vocabulary() -> None:
+    resolver = StaticClassContextResolver(
+        by_scheduled_class={
+            SCHEDULED: ClassContext(
+                scheduled_class_id=SCHEDULED,
+                class_section_id=SECTION,
+                institution_id=INSTITUTION,
+                discipline="medicine",
+            )
+        }
+    )
+    h = Harness(FakeSpeechProvider(), resolver=resolver)
+    req = lecture_request(2).model_copy(update={"institution_id": None, "discipline": None})
+    job, _ = await h.service.submit(req)
+    done = await h.service.run(job.job_id)
+    assert done.status is JobStatus.COMPLETED
+    stored = h.store.transcripts[done.transcript_id or ""]
+    assert stored["classSectionId"] == SECTION and stored["institutionId"] == INSTITUTION
+    assert done.request.discipline == "medicine"
+    assert h.provider.calls[0][1].phrases == ("ementa", "anamnese")
+
+
+async def test_class_context_failure_does_not_block() -> None:
+    class Broken:
+        async def resolve(self, **_: object) -> ClassContext | None:
+            raise RuntimeError("academic-integration down")
+
+    h = Harness(FakeSpeechProvider(), resolver=Broken())
+    job, _ = await h.service.submit(lecture_request(1))
+    done = await h.service.run(job.job_id)
+    assert done.status is JobStatus.COMPLETED
+    assert h.store.transcripts[done.transcript_id or ""]["classSectionId"] is None
+
+
+async def test_run_twice_is_a_no_op() -> None:
+    h = Harness(FakeSpeechProvider())
+    job, _ = await h.service.submit(lecture_request(1))
+    await h.service.run(job.job_id)
+    again = await h.service.run(job.job_id)
+    assert again.status is JobStatus.COMPLETED
+    assert len(h.provider.calls) == 1

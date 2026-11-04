@@ -56,7 +56,7 @@ def build_recognition_config(model: str, config: RecognitionConfig) -> dict[str,
                 {
                     "inline_phrase_set": {
                         "phrases": [
-                            {"value": p, "boost": config.phrase_boost} for p in config.phrases
+                            {"value": p, "boost": config.boost_for(p)} for p in config.phrases
                         ]
                     }
                 }

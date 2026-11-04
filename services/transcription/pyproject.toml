@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ci-transcription"
-version = "0.2.0"
+version = "0.3.0"
 description = "Classroom Intelligence — Transcription Service (pt-BR speech-to-text)"
 requires-python = ">=3.12"
 dependencies = [
@@ -13,6 +13,8 @@ dependencies = [
     "pydantic>=2.9.0",
     "structlog>=24.0.0",
     "httpx>=0.27.0",
+    "psycopg[binary]>=3.2.0",
+    "psycopg-pool>=3.2.0",
 ]
 
 [project.optional-dependencies]

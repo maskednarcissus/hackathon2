@@ -7,10 +7,15 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
+
+from transcription.ids import check_uuid
+
+#: Platform identifiers are UUID strings (contract §2); normalised to lowercase.
+UUIDStr = Annotated[str, AfterValidator(check_uuid)]
 
 
 class CamelModel(BaseModel):
@@ -36,10 +41,15 @@ class AudioSegmentRef(CamelModel):
 
 
 class TranscriptionRequest(CamelModel):
-    recording_session_id: str = Field(min_length=1)
-    scheduled_class_id: str | None = None
-    institution_id: str | None = None
-    discipline: str | None = None
+    recording_session_id: UUIDStr
+    scheduled_class_id: UUIDStr | None = None
+    class_section_id: UUIDStr | None = None
+    institution_id: UUIDStr | None = None
+    classroom_id: UUIDStr | None = None
+    #: Recording bounds — used for class identification when no scheduledClassId is known.
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    discipline: str | None = Field(default=None, max_length=100)
     language: str = "pt-BR"
     segments: list[AudioSegmentRef] = Field(min_length=1)
 
@@ -97,10 +107,10 @@ class TranscriptionJob(CamelModel):
 class EventEnvelope(CamelModel):
     """Platform event envelope (§6)."""
 
-    event_id: str
+    event_id: UUIDStr
     type: str
     version: int = 1
     occurred_at: datetime
     source: str
-    institution_id: str | None = None
+    institution_id: UUIDStr | None = None
     data: dict[str, Any]

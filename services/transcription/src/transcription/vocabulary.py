@@ -68,3 +68,27 @@ class VocabularyCatalog:
                 seen.add(key)
                 out.append(phrase)
         return tuple(out[: self.max_phrases])
+
+
+class StaticVocabularySource:
+    """Vocabulary from the JSON catalog only."""
+
+    def __init__(self, catalog: VocabularyCatalog | None = None) -> None:
+        self.catalog = catalog or VocabularyCatalog()
+
+    async def phrases_for(
+        self, institution_id: str | None, discipline: str | None
+    ) -> tuple[tuple[str, ...], dict[str, float]]:
+        return self.catalog.phrases_for(institution_id, discipline), {}
+
+
+def merge_phrases(*groups: tuple[str, ...] | list[str], max_phrases: int = 500) -> tuple[str, ...]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for group in groups:
+        for phrase in group:
+            key = phrase.strip().casefold()
+            if key and key not in seen:
+                seen.add(key)
+                out.append(phrase.strip())
+    return tuple(out[:max_phrases])

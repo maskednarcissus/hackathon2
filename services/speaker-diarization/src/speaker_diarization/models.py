@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
+
+from speaker_diarization.ids import check_uuid
+
+#: Platform identifiers are UUID strings (contract §2); normalised to lowercase.
+UUIDStr = Annotated[str, AfterValidator(check_uuid)]
 
 
 class CamelModel(BaseModel):
@@ -47,9 +52,9 @@ class TranscriptSegmentRef(CamelModel):
 
 
 class DiarizationRequest(CamelModel):
-    transcript_id: str = Field(min_length=1)
-    recording_session_id: str | None = None
-    institution_id: str | None = None
+    transcript_id: UUIDStr
+    recording_session_id: UUIDStr | None = None
+    institution_id: UUIDStr | None = None
     audio: AudioSource | None = None
     segments: list[TranscriptSegmentRef] = Field(min_length=1)
     max_speakers: int | None = Field(default=None, ge=1, le=20)
@@ -77,10 +82,10 @@ class DiarizationResult(CamelModel):
 
 
 class EventEnvelope(CamelModel):
-    event_id: str
+    event_id: UUIDStr
     type: str
     version: int = 1
     occurred_at: datetime
     source: str
-    institution_id: str | None = None
+    institution_id: UUIDStr | None = None
     data: dict[str, Any]

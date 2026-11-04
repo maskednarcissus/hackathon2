@@ -39,6 +39,20 @@ ruff check . && ruff format --check . && mypy src/ && pytest
 uvicorn main:app --app-dir src --port 8004
 ```
 
+## Integration (Postgres, event bus, security)
+
+* `DATABASE_URL` → `adapters/postgres.py`: `speaker_turns` replaced atomically per transcript
+  (advisory lock; `processing_version` column from `data/migrations/pending/speaker-diarization.sql`)
+  and `processed_events` (consumer `speaker-diarization`). Unset → in-memory.
+  `GET /v1/diarizations/{transcriptId}/turns` reads them back.
+* Events: `EVENT_BUS_URL` → `POST {url}/v1/topics/{type}:publish`; `PUBSUB_PROJECT_ID` → Pub/Sub;
+  else logged. The push route is idempotent by `eventId` and answers 2xx only after processing.
+* `INTERNAL_API_TOKEN` → `x-internal-token` required on `/v1/events/*` and sent on outbound calls.
+* transcript-management segments are read page by page (`cursor`/`limit=50`); the speakers `PUT`
+  also sends `method` (`provider_tags` | `acoustic_clustering`) and `processingVersion` for
+  `transcripts.diarization_method/_version`.
+* Postgres tests: `TEST_DATABASE_URL=postgresql://… pytest` (fresh `ci_test_*` DB per module).
+
 ## Technology
 
 Python · FastAPI · NumPy · Pub/Sub

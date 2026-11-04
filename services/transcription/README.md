@@ -43,6 +43,23 @@ ruff check . && ruff format --check . && mypy src/ && pytest
 uvicorn main:app --app-dir src --port 8003
 ```
 
+## Integration (Postgres, event bus, security)
+
+* `DATABASE_URL` → `adapters/postgres.py`: `transcription_jobs` (create-if-absent on the partial
+  unique index `uq_transcription_jobs_active`, atomic `queued → running` claim), vocabularies from
+  `transcription_vocabularies` merged over the JSON catalog (platform-wide rows need
+  `data/migrations/pending/transcription.sql`), `processed_events` (consumer `transcription`).
+  Unset → in-memory.
+* Events: `EVENT_BUS_URL` → `POST {url}/v1/topics/{type}:publish`; `PUBSUB_PROJECT_ID` → Pub/Sub;
+  else logged. The push route is idempotent by `eventId`, processes the job **before** answering
+  2xx, and answers `409` while another delivery is still running the job (bus retries).
+* `INTERNAL_API_TOKEN` → `x-internal-token` required on `/v1/events/*` and sent on outbound calls.
+* `classSectionId` / `institutionId` / discipline come from the `recording.segmented` payload, or
+  from academic-integration (`GET /v1/scheduled-classes/{id}`, else `POST /v1/class-identification`
+  with classroom + recording bounds) when `ACADEMIC_INTEGRATION_URL` is set, and are passed to
+  `POST /v1/transcripts`. A `409 transcript_exists` is treated as success.
+* Postgres tests: `TEST_DATABASE_URL=postgresql://… pytest` (fresh `ci_test_*` DB per module).
+
 ## Technology
 
 Python · FastAPI · Google Cloud Speech-to-Text v2 (Chirp 2) · Pub/Sub

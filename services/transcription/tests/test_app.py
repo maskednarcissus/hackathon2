@@ -1,5 +1,6 @@
 import base64
 import json
+import uuid
 from typing import Any
 
 from fastapi.testclient import TestClient
@@ -11,107 +12,180 @@ from transcription.fakes import (
     InMemoryJobRepository,
     InMemoryPublisher,
     InMemoryTranscriptStore,
+    StaticClassContextResolver,
 )
+from transcription.ports import ClassContext
 from transcription.service import TranscriptionService
 
-
-def make_client() -> tuple[TestClient, InMemoryTranscriptStore, InMemoryPublisher]:
-    store = InMemoryTranscriptStore()
-    publisher = InMemoryPublisher()
-    service = TranscriptionService(
-        provider=FakeSpeechProvider(),
-        store=store,
-        publisher=publisher,
-        audit=InMemoryAuditSink(),
-        jobs=InMemoryJobRepository(),
-    )
-    return TestClient(create_app(AppDeps(service=service))), store, publisher
+INSTITUTION = "11111111-1111-4111-8111-111111111111"
+SECTION = "22222222-2222-4222-8222-222222222222"
+SCHEDULED = "33333333-3333-4333-8333-333333333333"
 
 
-def segmented_event(recording_id: str = "rec-1") -> dict[str, Any]:
+class Env:
+    def __init__(self, token: str | None = None) -> None:
+        self.store = InMemoryTranscriptStore()
+        self.publisher = InMemoryPublisher()
+        self.provider = FakeSpeechProvider()
+        self.resolver = StaticClassContextResolver(
+            by_scheduled_class={
+                SCHEDULED: ClassContext(
+                    scheduled_class_id=SCHEDULED,
+                    class_section_id=SECTION,
+                    institution_id=INSTITUTION,
+                    discipline="law",
+                )
+            }
+        )
+        service = TranscriptionService(
+            provider=self.provider,
+            store=self.store,
+            publisher=self.publisher,
+            audit=InMemoryAuditSink(),
+            jobs=InMemoryJobRepository(),
+            class_context=self.resolver,
+        )
+        self.client = TestClient(create_app(AppDeps(service=service, internal_token=token)))
+
+
+def segmented_event(
+    recording_id: str | None = None, event_id: str | None = None, **data: Any
+) -> dict[str, Any]:
     return {
-        "eventId": "e1",
+        "eventId": event_id or str(uuid.uuid4()),
         "type": "recording.segmented",
         "version": 1,
         "occurredAt": "2026-11-04T19:00:00Z",
         "source": "audio-processing",
-        "institutionId": "inst-1",
+        "institutionId": INSTITUTION,
         "data": {
-            "recordingSessionId": recording_id,
+            "recordingSessionId": recording_id or str(uuid.uuid4()),
             "segments": [
                 {"index": 0, "startMs": 0, "endMs": 60_000, "storageUri": "gs://b/0.wav"},
                 {"index": 1, "startMs": 60_000, "endMs": 120_000, "storageUri": "gs://b/1.wav"},
             ],
+            **data,
         },
     }
 
 
+def push(envelope: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "message": {
+            "data": base64.b64encode(json.dumps(envelope).encode()).decode(),
+            "messageId": "1",
+            "attributes": {},
+        },
+        "subscription": "projects/p/subscriptions/s",
+    }
+
+
 def test_health() -> None:
-    client, _, _ = make_client()
-    assert client.get("/health").json() == {"status": "ok", "service": "transcription"}
+    assert Env().client.get("/health").json() == {"status": "ok", "service": "transcription"}
 
 
 def test_direct_transcription_and_status() -> None:
-    client, store, _ = make_client()
-    resp = client.post(
+    env = Env()
+    resp = env.client.post(
         "/v1/transcriptions",
         json={
-            "recordingSessionId": "rec-9",
+            "recordingSessionId": str(uuid.uuid4()),
             "segments": [{"index": 0, "startMs": 0, "endMs": 30_000, "storageUri": "gs://b/x"}],
         },
     )
     assert resp.status_code == 202
     job_id = resp.json()["jobId"]
-    status = client.get(f"/v1/transcriptions/{job_id}").json()
+    status = env.client.get(f"/v1/transcriptions/{job_id}").json()
     assert status["status"] == "completed"
-    assert status["transcriptId"] in store.transcripts
-    assert client.get("/v1/transcriptions/nope").status_code == 404
+    assert status["transcriptId"] in env.store.transcripts
+    assert env.client.get("/v1/transcriptions/nope").status_code == 404
 
 
 def test_validation_errors() -> None:
-    client, _, _ = make_client()
-    bad = client.post(
+    env = Env()
+    rid = str(uuid.uuid4())
+    bad = env.client.post(
         "/v1/transcriptions",
         json={
-            "recordingSessionId": "r",
+            "recordingSessionId": rid,
             "segments": [{"index": 0, "startMs": 10, "endMs": 5, "storageUri": "gs://b"}],
         },
     )
     assert bad.status_code == 422
-    empty = client.post("/v1/transcriptions", json={"recordingSessionId": "r", "segments": []})
+    empty = env.client.post("/v1/transcriptions", json={"recordingSessionId": rid, "segments": []})
     assert empty.status_code == 422
-
-
-def test_recording_segmented_event_raw_and_pubsub_push() -> None:
-    client, store, publisher = make_client()
-    first = client.post("/v1/events/recording-segmented", json=segmented_event())
-    assert first.status_code == 202
-    # Redelivery is idempotent.
-    again = client.post("/v1/events/recording-segmented", json=segmented_event())
-    assert again.status_code == 200 and again.json()["created"] is False
-    assert len(store.transcripts) == 1
-    assert publisher.events[0]["institutionId"] == "inst-1"
-
-    push = {
-        "message": {
-            "data": base64.b64encode(json.dumps(segmented_event("rec-2")).encode()).decode(),
-            "messageId": "1",
+    not_uuid = env.client.post(
+        "/v1/transcriptions",
+        json={
+            "recordingSessionId": "rec-1",
+            "segments": [{"index": 0, "startMs": 0, "endMs": 5, "storageUri": "gs://b"}],
         },
-        "subscription": "projects/p/subscriptions/s",
-    }
-    assert client.post("/v1/events/recording-segmented", json=push).status_code == 202
-    assert len(store.transcripts) == 2
+    )
+    assert not_uuid.status_code == 422
+
+
+def test_event_is_processed_before_ack_and_idempotent() -> None:
+    env = Env()
+    event = segmented_event(scheduledClassId=SCHEDULED)
+    first = env.client.post("/v1/events/recording-segmented", json=push(event))
+    assert first.status_code == 200
+    body = first.json()
+    assert body["status"] == "completed" and body["created"] is True
+    # Processing finished before the 2xx: the transcript exists already.
+    stored = env.store.transcripts[body["transcriptId"]]
+    # classSectionId / institutionId resolved from academic-integration and passed through.
+    assert stored["classSectionId"] == SECTION
+    assert stored["institutionId"] == INSTITUTION
+    assert stored["scheduledClassId"] == SCHEDULED
+
+    # Same eventId redelivered → duplicate, nothing re-run.
+    again = env.client.post("/v1/events/recording-segmented", json=event)
+    assert again.status_code == 200 and again.json()["duplicate"] is True
+    # New eventId, same recording → existing completed job returned.
+    other = segmented_event(event["data"]["recordingSessionId"], scheduledClassId=SCHEDULED)
+    third = env.client.post("/v1/events/recording-segmented", json=other)
+    assert third.status_code == 200 and third.json()["created"] is False
+    assert len(env.store.transcripts) == 1
+    assert len(env.provider.calls) == 2
+    completed = env.publisher.events[0]
+    assert completed["type"] == "transcription.completed"
+    assert completed["data"]["classSectionId"] == SECTION
+
+
+def test_class_section_from_payload_wins_without_lookup() -> None:
+    env = Env()
+    event = segmented_event(classSectionId=SECTION)
+    resp = env.client.post("/v1/events/recording-segmented", json=event)
+    stored = env.store.transcripts[resp.json()["transcriptId"]]
+    assert stored["classSectionId"] == SECTION and stored["institutionId"] == INSTITUTION
+
+
+def test_internal_token_required_on_event_route() -> None:
+    env = Env(token="s3cret")
+    event = segmented_event()
+    assert env.client.post("/v1/events/recording-segmented", json=event).status_code == 401
+    wrong = env.client.post(
+        "/v1/events/recording-segmented", json=event, headers={"x-internal-token": "nope"}
+    )
+    assert wrong.status_code == 401
+    ok = env.client.post(
+        "/v1/events/recording-segmented", json=event, headers={"x-internal-token": "s3cret"}
+    )
+    assert ok.status_code == 200
 
 
 def test_unexpected_event_type_is_acknowledged() -> None:
-    client, _, _ = make_client()
+    env = Env()
     event = segmented_event()
     event["type"] = "recording.uploaded"
-    resp = client.post("/v1/events/recording-segmented", json=event)
+    resp = env.client.post("/v1/events/recording-segmented", json=event)
     assert resp.status_code == 200 and resp.json()["ignored"] is True
 
 
-def test_bad_push_payload() -> None:
-    client, _, _ = make_client()
-    resp = client.post("/v1/events/recording-segmented", json={"message": {"data": "%%%"}})
+def test_bad_payloads() -> None:
+    env = Env()
+    resp = env.client.post("/v1/events/recording-segmented", json={"message": {"data": "%%%"}})
     assert resp.status_code == 400
+    event = segmented_event()
+    event["eventId"] = "not-a-uuid"
+    assert env.client.post("/v1/events/recording-segmented", json=event).status_code == 422

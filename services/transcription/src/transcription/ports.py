@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Protocol
 
 from transcription.models import AudioSegmentRef, TranscriptionJob, TranscriptSegment, Word
@@ -21,6 +23,11 @@ class RecognitionConfig:
     language: str = "pt-BR"
     phrases: tuple[str, ...] = ()
     phrase_boost: float = 10.0
+    #: Per-phrase boost overrides (e.g. institution vocabularies with their own boost).
+    boosts: Mapping[str, float] = field(default_factory=dict)
+
+    def boost_for(self, phrase: str) -> float:
+        return float(self.boosts.get(phrase, self.phrase_boost))
 
 
 @dataclass(frozen=True)
@@ -57,6 +64,8 @@ class TranscriptStoreClient(Protocol):
         provider: str,
         model: str,
         segments: list[TranscriptSegment],
+        class_section_id: str | None = None,
+        institution_id: str | None = None,
     ) -> StoredTranscript: ...
 
 
@@ -79,6 +88,15 @@ class AuditSink(Protocol):
 
 
 class JobRepository(Protocol):
+    async def create_if_absent(self, job: TranscriptionJob) -> tuple[TranscriptionJob, bool]:
+        """Insert ``job`` unless the recording already has a queued/running/completed job
+        (``uq_transcription_jobs_active``); returns ``(job, created)``."""
+        ...
+
+    async def claim(self, job_id: str) -> TranscriptionJob | None:
+        """Atomically move a *queued* job to *running*; ``None`` if it was not queued."""
+        ...
+
     async def save(self, job: TranscriptionJob) -> None: ...
 
     async def get(self, job_id: str) -> TranscriptionJob | None: ...
@@ -86,3 +104,47 @@ class JobRepository(Protocol):
     async def find_active_for_recording(
         self, recording_session_id: str
     ) -> TranscriptionJob | None: ...
+
+
+class VocabularySource(Protocol):
+    async def phrases_for(
+        self, institution_id: str | None, discipline: str | None
+    ) -> tuple[tuple[str, ...], dict[str, float]]:
+        """Phrases for a job and per-phrase boost overrides."""
+        ...
+
+
+@dataclass(frozen=True)
+class ClassContext:
+    scheduled_class_id: str | None = None
+    class_section_id: str | None = None
+    institution_id: str | None = None
+    discipline: str | None = None
+
+
+class ClassContextResolver(Protocol):
+    """academic-integration lookups: scheduled class → section, or class identification."""
+
+    async def resolve(
+        self,
+        *,
+        scheduled_class_id: str | None,
+        classroom_id: str | None,
+        started_at: datetime | None,
+        ended_at: datetime | None,
+        recording_session_id: str,
+    ) -> ClassContext | None: ...
+
+
+class ProcessedEventStore(Protocol):
+    """Idempotent consumption by ``eventId`` (``processed_events``)."""
+
+    async def is_processed(self, event_id: str) -> bool: ...
+
+    async def mark_processed(self, event_id: str) -> None: ...
+
+
+class Lifecycle(Protocol):
+    async def open(self) -> None: ...
+
+    async def close(self) -> None: ...
