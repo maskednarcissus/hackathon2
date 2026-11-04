@@ -52,6 +52,7 @@ export interface AcademicRepository {
   getCourse(id: string): Promise<Course | null>;
   getProfessor(id: string): Promise<Person | null>;
   getTerm(id: string): Promise<Term | null>;
+  enrollmentsOfSection(classSectionId: string): Promise<Enrollment[]>;
 }
 
 export const scheduledClassKey = (s: Pick<ScheduledClass, 'classSectionId' | 'key'>): string =>
@@ -146,5 +147,10 @@ export class InMemoryAcademicRepository implements AcademicRepository {
   }
   getTerm(id: string): Promise<Term | null> {
     return Promise.resolve(this.terms.get(id) ?? null);
+  }
+  enrollmentsOfSection(classSectionId: string): Promise<Enrollment[]> {
+    return Promise.resolve(
+      [...this.enrollments.values()].filter((e) => e.classSectionId === classSectionId),
+    );
   }
 }

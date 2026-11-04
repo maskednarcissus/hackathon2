@@ -228,6 +228,24 @@ export function buildApp(deps: AcademicDeps): FastifyInstance {
     return describe(sc);
   });
 
+  /** Roster for consent checks (organization): who teaches and who is actively enrolled. */
+  app.get('/v1/class-sections/:id/roster', async (req) => {
+    const { id } = IdParams.parse(req.params);
+    const section = await repo.getClassSection(id);
+    if (!section)
+      throw new HttpError(404, 'class_section_not_found', `Class section ${id} not found`);
+    const enrollments = await repo.enrollmentsOfSection(id);
+    return {
+      classSectionId: section.id,
+      institutionId: section.institutionId,
+      professorIds: [section.professorId],
+      studentIds: enrollments
+        .filter((e) => e.status === 'active')
+        .map((e) => e.studentId)
+        .sort(),
+    };
+  });
+
   app.post('/v1/class-identification', async (req) => {
     const input = IdentificationSchema.parse(req.body);
     const startedAt = new Date(input.startedAt);

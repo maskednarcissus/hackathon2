@@ -281,6 +281,34 @@ describe('scheduled classes query', () => {
   });
 });
 
+describe('class section roster', () => {
+  it('returns the professor and actively enrolled students; 404 for unknown sections', async () => {
+    const { app, repo } = setup();
+    const withdrawn = payload();
+    (withdrawn['enrollments'] as Record<string, unknown>[])[1] = {
+      studentExternalId: 'S2',
+      classSectionExternalId: 'DIR101-A',
+      status: 'withdrawn',
+    };
+    await app.inject({ method: 'POST', url: '/v1/imports', payload: withdrawn });
+    const snap = await repo.snapshot(INST);
+    const section = snap.classSections.get('DIR101-A');
+    const s1 = snap.students.get('S1');
+    const prof = snap.professors.get('P1');
+    const res = await app.inject({ url: `/v1/class-sections/${section?.id ?? ''}/roster` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      classSectionId: section?.id,
+      institutionId: INST,
+      professorIds: [prof?.id],
+      studentIds: [s1?.id],
+    });
+    const missing = await app.inject({ url: `/v1/class-sections/${ROOM}/roster` });
+    expect(missing.statusCode).toBe(404);
+    expect((await app.inject({ url: '/v1/class-sections/nope/roster' })).statusCode).toBe(400);
+  });
+});
+
 describe('class identification (1.13)', () => {
   it('identifies the class of a recording and audits the decision', async () => {
     const { app, audit } = setup();
