@@ -1,4 +1,7 @@
 import { buildApp } from './app.js';
+import { HttpLectureClient } from './concepts/lectures.js';
+import { InMemoryConceptRepository } from './concepts/model.js';
+import { PgConceptRepository } from './concepts/repository.pg.js';
 import { HttpAcademicClient, HttpAuditClient } from './clients.js';
 import { createJwksAccessTokenVerifier } from './jwt-verify.js';
 import { publisherFromEnv } from './platform/event-bus.js';
@@ -27,6 +30,11 @@ const app = buildApp({
   ),
   events: publisherFromEnv(env, (event) => app.log.info({ event }, 'event published')),
   embeddings,
+  concepts: pool ? new PgConceptRepository(pool) : new InMemoryConceptRepository(),
+  lectures: new HttpLectureClient(
+    env['LECTURE_INTELLIGENCE_URL'] ?? 'http://localhost:8006',
+    internalToken,
+  ),
   ...(internalToken ? { internalToken } : {}),
   ...(env['IDENTITY_JWKS_URL']
     ? { verifier: createJwksAccessTokenVerifier({ jwksUrl: env['IDENTITY_JWKS_URL'] }) }

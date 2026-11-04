@@ -1,10 +1,12 @@
-import { analyze } from './text.js';
+import { analyze, type Lang } from './text.js';
 
 export interface IndexedDoc {
   key: string; // `${transcriptId}:${segmentIndex}`
   transcriptId: string;
   segmentIndex: number;
   classSectionId: string;
+  /** Analyser language of the document (from the transcript language). Default `pt`. */
+  language?: Lang;
 }
 
 export interface Hit {
@@ -27,6 +29,8 @@ export class SearchIndex {
   private readonly postings = new Map<string, Map<string, number>>();
   private readonly vectors = new Map<string, Float64Array>();
   private totalLength = 0;
+  /** Documents per analyser language (queries are analysed once per language present). */
+  private readonly languages = new Map<Lang, number>();
 
   get size(): number {
     return this.docs.size;
@@ -35,9 +39,11 @@ export class SearchIndex {
   upsert(doc: IndexedDoc, text: string, vector?: readonly number[]): void {
     this.remove(doc.key);
     const terms = new Map<string, number>();
-    const analysed = analyze(text);
+    const language = doc.language ?? 'pt';
+    const analysed = analyze(text, language);
     for (const t of analysed) terms.set(t, (terms.get(t) ?? 0) + 1);
-    this.docs.set(doc.key, { ...doc, length: analysed.length, terms });
+    this.docs.set(doc.key, { ...doc, language, length: analysed.length, terms });
+    this.languages.set(language, (this.languages.get(language) ?? 0) + 1);
     this.totalLength += analysed.length;
     for (const [t, tf] of terms) {
       let p = this.postings.get(t);
@@ -66,6 +72,10 @@ export class SearchIndex {
       if (p && p.size === 0) this.postings.delete(t);
     }
     this.totalLength -= doc.length;
+    const language = doc.language ?? 'pt';
+    const left = (this.languages.get(language) ?? 1) - 1;
+    if (left > 0) this.languages.set(language, left);
+    else this.languages.delete(language);
     this.docs.delete(key);
     this.vectors.delete(key);
   }
@@ -80,19 +90,40 @@ export class SearchIndex {
   }
 
   lexical(query: string, sections: ReadonlySet<string>, limit: number): Hit[] {
+    return this.lexicalWeighted([{ text: query, weight: 1 }], sections, limit);
+  }
+
+  /**
+   * BM25 over several weighted query texts (the user query plus, e.g., concept expansions). Each text
+   * is analysed in every document language present, and a document only matches terms analysed in
+   * its own language.
+   */
+  lexicalWeighted(
+    queries: readonly { text: string; weight: number }[],
+    sections: ReadonlySet<string>,
+    limit: number,
+  ): Hit[] {
     const n = this.docs.size;
     if (n === 0) return [];
     const avgdl = this.totalLength / n || 1;
     const scores = new Map<string, number>();
-    for (const term of new Set(analyze(query))) {
-      const p = this.postings.get(term);
-      if (!p) continue;
-      const idf = Math.log(1 + (n - p.size + 0.5) / (p.size + 0.5));
-      for (const [key, tf] of p) {
-        const doc = this.docs.get(key);
-        if (!doc || !sections.has(doc.classSectionId)) continue;
-        const s = (idf * tf * (K1 + 1)) / (tf + K1 * (1 - B + (B * doc.length) / avgdl));
-        scores.set(key, (scores.get(key) ?? 0) + s);
+    for (const language of this.languages.keys()) {
+      const weights = new Map<string, number>();
+      for (const q of queries) {
+        for (const term of new Set(analyze(q.text, language))) {
+          weights.set(term, Math.max(weights.get(term) ?? 0, q.weight));
+        }
+      }
+      for (const [term, weight] of weights) {
+        const p = this.postings.get(term);
+        if (!p) continue;
+        const idf = Math.log(1 + (n - p.size + 0.5) / (p.size + 0.5));
+        for (const [key, tf] of p) {
+          const doc = this.docs.get(key);
+          if (!doc || doc.language !== language || !sections.has(doc.classSectionId)) continue;
+          const s = (weight * idf * tf * (K1 + 1)) / (tf + K1 * (1 - B + (B * doc.length) / avgdl));
+          scores.set(key, (scores.get(key) ?? 0) + s);
+        }
       }
     }
     return top(scores, limit);

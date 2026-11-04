@@ -22,7 +22,7 @@ export const SegmentInputSchema = z
     confidence,
     language: z
       .string()
-      .regex(/^[a-z]{2,3}(-[A-Z]{2})?$/)
+      .regex(/^[a-z]{2,3}(-([A-Z]{2}|[0-9]{3}))?$/)
       .optional(),
     speakerLabel: z
       .string()
@@ -45,7 +45,7 @@ export const CreateTranscriptSchema = z
     institutionId: z.string().uuid().optional(),
     language: z
       .string()
-      .regex(/^[a-z]{2,3}(-[A-Z]{2})?$/)
+      .regex(/^[a-z]{2,3}(-([A-Z]{2}|[0-9]{3}))?$/)
       .default('pt-BR'),
     processingVersion: z.string().min(1).max(100),
     provider: z.string().min(1).max(100),
@@ -152,4 +152,6 @@ export const SearchQuerySchema = z.object({
     .pipe(z.array(z.string().uuid()).min(1, 'at least one classSectionId is required').max(500)),
   limit: z.coerce.number().int().min(1).max(50).default(20),
   mode: z.enum(['hybrid', 'lexical', 'semantic']).default('hybrid'),
+  /** `concepts`: expand the query with linked concepts and return them (Phase 6.3). */
+  expand: z.enum(['concepts']).optional(),
 });

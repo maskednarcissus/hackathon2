@@ -172,4 +172,32 @@ describe.skipIf(!TEST_DATABASE_URL)('academic-analytics on Postgres', () => {
       medianReviewLatencyMinutes: 90,
     });
   });
+  it('computes learning patterns with enrolment sizes from the Postgres mirror', async () => {
+    const { app, fake } = await pgSetup();
+    const c1104 = `${S1.slice(0, 2)}261104-0000-4000-8000-000000000000`;
+    fake.auditEvents = Array.from({ length: 6 }, (_, i) => ({
+      id: `pg-lp-${i}`,
+      tenantId: INST,
+      actorId: `f0000000-0000-4000-8000-${String(i + 1).padStart(12, '0')}`,
+      actorType: 'student',
+      action: 'lecture.assistant_question',
+      resourceType: 'assistant_answer',
+      resourceId: null,
+      metadata: { classSectionId: S1, scheduledClassId: c1104 },
+      occurredAt: '2026-11-05T12:00:00.000Z',
+    }));
+    const body = (
+      await app.inject({
+        url: `/v1/courses/${C1}/learning-patterns?from=2026-11-01&to=2026-11-30`,
+        headers: coordinator,
+      })
+    ).json<{
+      difficultTopics: { topics: { questions: number; questionsPerEnrolledStudent: number }[] };
+    }>();
+    // S1 has 8 enrolled students in the mirror → 6 / 8
+    expect(body.difficultTopics.topics[0]).toMatchObject({
+      questions: 6,
+      questionsPerEnrolledStudent: 0.75,
+    });
+  });
 });

@@ -40,6 +40,14 @@ import {
   type EmbeddingClient,
 } from './search/embeddings.js';
 import { SearchService } from './search/service.js';
+import { analyze, languageOf } from './search/text.js';
+import {
+  LectureServiceUnavailableError,
+  StaticLectureClient,
+  type LectureClient,
+} from './concepts/lectures.js';
+import { InMemoryConceptRepository, type ConceptRepository } from './concepts/model.js';
+import { ConceptService } from './concepts/service.js';
 
 export interface Clock {
   now(): Date;
@@ -64,9 +72,53 @@ export interface TranscriptDeps {
   internalToken?: string;
   /** Identity access-token verifier; when set, student searches emit `lecture.searched`. */
   verifier?: AccessTokenVerifier;
+  /** Concept graph storage (Phase 6.3). */
+  concepts?: ConceptRepository;
+  /** lecture-intelligence client used when a `lecture.structured` event arrives. */
+  lectures?: LectureClient;
+}
+
+const SectionsQuery = z.object({
+  classSectionIds: z
+    .string()
+    .transform((v) => [
+      ...new Set(
+        v
+          .split(',')
+          .map((x) => x.trim())
+          .filter(Boolean),
+      ),
+    ])
+    .pipe(z.array(z.string().uuid()).min(1, 'at least one classSectionId is required').max(500)),
+});
+
+/** Pub/Sub push (`{message: {data: base64(envelope)}}`) or a raw envelope (integration-stage §2). */
+function parsePushedEnvelope(body: unknown): {
+  eventId: string;
+  type: string;
+  data: Record<string, unknown>;
+} {
+  let candidate = body;
+  const message = (body as { message?: { data?: unknown } } | null)?.message;
+  if (message && typeof message.data === 'string') {
+    try {
+      candidate = JSON.parse(Buffer.from(message.data, 'base64').toString('utf8'));
+    } catch {
+      throw new HttpError(400, 'invalid_push_message', 'message.data is not base64-encoded JSON');
+    }
+  }
+  return z
+    .object({ eventId: z.string().uuid(), type: z.string().min(1), data: z.record(z.unknown()) })
+    .passthrough()
+    .parse(candidate);
 }
 
 const MAX_ENGAGEMENT_SECTIONS = 20;
+
+/** At most 5 normalised terms (≤ 40 chars) of a query — what learning-pattern analytics may aggregate. */
+function zeroResultTerms(q: string): string[] {
+  return [...new Set(analyze(q, languageOf('pt')))].filter((t) => t.length <= 40).slice(0, 5);
+}
 
 const IdParams = z.object({ id: z.string().uuid() });
 const SegmentParams = z.object({
@@ -115,6 +167,14 @@ export function buildApp(deps: TranscriptDeps): FastifyInstance {
     },
     (msg, err) => app.log.warn({ err }, msg),
     deps.vectorStore,
+  );
+  const conceptService = new ConceptService(
+    deps.concepts ?? new InMemoryConceptRepository(),
+    deps.lectures ?? new StaticLectureClient(),
+    deps.embeddings ?? new FakeEmbeddingClient(),
+    { transcript: (id) => repo.findById(id), segments: (id) => repo.segments(id) },
+    () => clock.now(),
+    (msg, err) => app.log.warn({ err }, msg),
   );
   if (deps.warmSearchIndex) {
     app.addHook('onReady', async () => {
@@ -498,9 +558,20 @@ export function buildApp(deps: TranscriptDeps): FastifyInstance {
   app.get('/v1/search', async (req) => {
     const q = SearchQuerySchema.parse(req.query);
     const claims = await optionalClaims(req.headers.authorization);
+    const expansion =
+      q.expand === 'concepts' ? await conceptService.expand(q.q, q.classSectionIds) : null;
     let response;
     try {
-      response = await search.search(q.q, q.classSectionIds, q.limit, q.mode);
+      response = {
+        ...(await search.search(
+          q.q,
+          q.classSectionIds,
+          q.limit,
+          q.mode,
+          expansion?.expansionTerms ?? [],
+        )),
+        ...(expansion ? { concepts: expansion.concepts } : {}),
+      };
     } catch (err) {
       if (err instanceof EmbeddingUnavailableError)
         throw new HttpError(502, 'embeddings_unavailable', err.message);
@@ -516,11 +587,18 @@ export function buildApp(deps: TranscriptDeps): FastifyInstance {
           action: 'lecture.searched',
           resourceType: 'class_section',
           resourceId: classSectionId,
-          metadata: {
-            classSectionId,
-            mode: q.mode,
-            resultCount: response.results.filter((r) => r.classSectionId === classSectionId).length,
-          },
+          metadata: (() => {
+            const resultCount = response.results.filter(
+              (r) => r.classSectionId === classSectionId,
+            ).length;
+            return {
+              classSectionId,
+              mode: q.mode,
+              resultCount,
+              // Learning patterns (6.7): normalised terms of searches without results — never the raw query.
+              ...(resultCount === 0 ? { zeroResultTerms: zeroResultTerms(q.q) } : {}),
+            };
+          })(),
         });
       }
     }
@@ -536,6 +614,46 @@ export function buildApp(deps: TranscriptDeps): FastifyInstance {
       throw new HttpError(401, 'invalid_token', 'Invalid or expired access token');
     }
   }
+
+  // ---- Concept graph (Phase 6.3) ----
+  app.post(
+    '/v1/events/lecture-structured',
+    { preHandler: requireInternalToken(deps.internalToken) },
+    async (req) => {
+      const event = parsePushedEnvelope(req.body);
+      if (event.type !== 'lecture.structured')
+        return { status: 'skipped', reason: `unexpected event type ${event.type}` };
+      const scheduledClassId = z.string().uuid().parse(event.data['scheduledClassId']);
+      try {
+        return await conceptService.ingest(event.eventId, scheduledClassId);
+      } catch (err) {
+        if (err instanceof LectureServiceUnavailableError) {
+          // 503 → the event bus retries with backoff.
+          throw new HttpError(503, 'lecture_intelligence_unavailable', err.message);
+        }
+        throw err;
+      }
+    },
+  );
+
+  app.get('/v1/concepts/:id', async (req) => {
+    const { id } = IdParams.parse(req.params);
+    const { classSectionIds } = SectionsQuery.parse(req.query);
+    const concept = await conceptService.concept(id, classSectionIds);
+    if (!concept)
+      throw new HttpError(
+        404,
+        'concept_not_found',
+        `Concept ${id} not found in the given sections`,
+      );
+    return concept;
+  });
+
+  app.get('/v1/courses/:courseId/concept-map', async (req) => {
+    const { courseId } = z.object({ courseId: z.string().uuid() }).parse(req.params);
+    const { classSectionIds } = SectionsQuery.parse(req.query);
+    return conceptService.courseMap(courseId, classSectionIds);
+  });
 
   // ---- Governance data-owner endpoints (integration-stage §5) ----
   const internal = { preHandler: requireInternalToken(deps.internalToken) };

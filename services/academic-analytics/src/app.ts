@@ -15,9 +15,10 @@ import { FakeEmbeddingClient, type EmbeddingClient } from './embeddings.js';
 import { HttpError, installErrorHandler } from './errors.js';
 import { FactSource } from './fact-source.js';
 import type { UpstreamClients } from './fakes.js';
+import { learningPatterns, loadInputs } from './learning-patterns.js';
 import { buildReport, REPORT_KINDS, toCsv } from './reports.js';
 import type { AnalyticsRepository } from './repository.js';
-import { addDays, daysBetween, ratio } from './stats.js';
+import { addDays, daysBetween, MIN_COHORT, ratio } from './stats.js';
 
 export interface Clock {
   now(): Date;
@@ -290,6 +291,74 @@ export function buildApp(deps: AnalyticsDeps): FastifyInstance {
       to,
       source: result.source,
       ...(await adoption(id, from, to, result.facts, directory, up)),
+    };
+  });
+
+  // ---------------------------------------------------------------- 6.7 learning patterns
+  app.get('/v1/courses/:courseId/learning-patterns', async (req) => {
+    const { courseId } = z.object({ courseId: uuid }).parse(req.params);
+    const { institutionId, sections } = await courseInstitution(courseId);
+    await auth.analyticsReader(req, institutionId);
+    const { from, to } = range(req.query, 60);
+    const inputs = await loadInputs(institutionId, sections, from, to, directory, up);
+    const ids = new Set(sections.map((s) => s.classSectionId));
+    return {
+      courseId,
+      institutionId,
+      from,
+      to,
+      minCohort: MIN_COHORT,
+      sections: sections.length,
+      ...(await learningPatterns(inputs, ids, from, to, up)),
+    };
+  });
+
+  app.get('/v1/institutions/:id/learning-patterns', async (req) => {
+    const { id } = InstitutionParams.parse(req.params);
+    await auth.analyticsReader(req, id);
+    const { from, to } = range(req.query, 60);
+    const sections = await directory.sections(id);
+    const inputs = await loadInputs(id, sections, from, to, directory, up);
+    const overall = await learningPatterns(
+      inputs,
+      new Set(sections.map((s) => s.classSectionId)),
+      from,
+      to,
+      up,
+    );
+    const byCourse = new Map<string, typeof sections>();
+    for (const s of sections) byCourse.set(s.courseId, [...(byCourse.get(s.courseId) ?? []), s]);
+    const courses = await Promise.all(
+      [...byCourse.entries()].map(async ([courseId, list]) => {
+        const p = await learningPatterns(
+          inputs,
+          new Set(list.map((s) => s.classSectionId)),
+          from,
+          to,
+          up,
+        );
+        return {
+          courseId,
+          courseCode: list[0]?.courseCode ?? null,
+          courseName: list[0]?.courseName ?? null,
+          activeStudents: p.activeStudents,
+          engagement: p.engagementCurve.summary,
+          meanRevisitRate: p.revisitBeforeAssessments.summary.meanRevisitRate,
+          meanRevisitLift: p.revisitBeforeAssessments.summary.meanLift,
+          zeroResultRate: p.searchesWithoutResults.summary.zeroResultRate,
+          topDifficultTopic: p.difficultTopics.topics[0] ?? null,
+        };
+      }),
+    );
+    return {
+      institutionId: id,
+      from,
+      to,
+      minCohort: MIN_COHORT,
+      courses: courses.sort((a, b) =>
+        (a.courseCode ?? '').localeCompare(b.courseCode ?? '', 'pt-BR'),
+      ),
+      overall,
     };
   });
 

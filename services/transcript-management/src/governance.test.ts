@@ -219,7 +219,12 @@ describe('lecture.searched engagement (integration-stage §5)', () => {
         action: 'lecture.searched',
         resourceType: 'class_section',
         resourceId: SECTION_B,
-        metadata: { classSectionId: SECTION_B, mode: 'hybrid', resultCount: 0 },
+        metadata: {
+          classSectionId: SECTION_B,
+          mode: 'hybrid',
+          resultCount: 0,
+          zeroResultTerms: ['prov'],
+        },
       },
     ]);
     expect(JSON.stringify(searched)).not.toContain('prova');

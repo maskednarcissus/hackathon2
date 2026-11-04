@@ -86,3 +86,30 @@ TypeScript · Fastify · Zod · PostgreSQL
   replace the author with the anonymous id (lecture content unchanged); students → `not_applicable`.
 - `PUT /v1/transcripts/:id/speakers` accepts `method` (`provider_tags` | `acoustic_clustering`) and `processingVersion`,
   stored as `diarizationMethod` / `diarizationVersion`.
+
+## Phase 6
+
+### 6.3 Concept-linked search
+
+- `POST /v1/events/lecture-structured` (internal token; Pub/Sub push or raw envelope, idempotent by `eventId` via
+  `processed_events`) fetches lecture-intelligence `GET /v1/lectures/{scheduledClassId}` (`LECTURE_INTELLIGENCE_URL`)
+  and applies its concepts to the course graph (`src/concepts/`): concepts merge into a node by language-aware
+  normalised term or embedding cosine ≥ 0.88; a re-structured lecture replaces its mentions; `co_occurrence` edges
+  (same lecture) and `related` edges (a definition/example names another concept). Lecture-intelligence outages → `503`
+  so the bus retries. Subscription to add: `lecture.structured → transcript-management /v1/events/lecture-structured`.
+- `GET /v1/search?…&expand=concepts` matches concepts in the caller's sections, expands the lexical query with their
+  aliases and strongest neighbours (weight 0.5) and returns `concepts: [{id, term, relation: match|related, lectures}]`.
+- `GET /v1/concepts/:id?classSectionIds=` — definition variants with citations (segment indexes + time range), lectures,
+  related concepts (`kinds`, `weight`); `404` when no mention is visible in the given sections.
+- `GET /v1/courses/:courseId/concept-map?classSectionIds=` — nodes (mention/lecture counts) and edges, section-scoped.
+- Storage: `concept_nodes`, `concept_mentions`, `concept_edges` (`data/migrations/pending/transcript-management-phase6.sql`),
+  one transaction per lecture under a per-course advisory lock.
+
+### 6.4 Languages
+
+Each transcript is analysed in its own language (`pt-BR` default; `en-*`, `es-*` incl. `es-419`, `fr-*`; other tags get
+accent folding only): per-language stopwords and light stemmers (`src/search/text.ts`); queries are analysed once per
+language present and match only documents of that language; results carry `language`.
+
+Student searches without results add `metadata.zeroResultTerms` (≤ 5 normalised terms — never the raw query) to the
+`lecture.searched` audit event for learning-pattern analytics.

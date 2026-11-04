@@ -2,7 +2,7 @@ import type { Transcript, TranscriptSegment } from '../domain.js';
 import { EmbeddingUnavailableError, type EmbeddingClient } from './embeddings.js';
 import type { VectorStore } from '../repository.js';
 import { SearchIndex, reciprocalRankFusion, type Hit } from './index.js';
-import { analyze, highlight } from './text.js';
+import { analyze, highlight, languageOf, type Lang } from './text.js';
 
 export type SearchMode = 'hybrid' | 'lexical' | 'semantic';
 
@@ -15,6 +15,8 @@ export interface SearchResult {
   endMs: number;
   text: string;
   highlight: string;
+  /** Transcript language (BCP-47). */
+  language: string;
   score: number;
   speakerLabel?: string;
 }
@@ -36,6 +38,7 @@ export interface SegmentLookup {
 const EMBED_BATCH = 100;
 const CANDIDATES = 100;
 const MIN_COSINE = 0.1;
+const EXPANSION_WEIGHT = 0.5;
 
 const keyOf = (transcriptId: string, segmentIndex: number): string =>
   `${transcriptId}:${segmentIndex}`;
@@ -103,6 +106,7 @@ export class SearchService {
           transcriptId: t.id,
           segmentIndex: s.segmentIndex,
           classSectionId,
+          language: languageOf(t.language),
         },
         s.text,
       );
@@ -149,7 +153,13 @@ export class SearchService {
     if (!t.classSectionId) return;
     const key = keyOf(t.id, s.segmentIndex);
     this.index.upsert(
-      { key, transcriptId: t.id, segmentIndex: s.segmentIndex, classSectionId: t.classSectionId },
+      {
+        key,
+        transcriptId: t.id,
+        segmentIndex: s.segmentIndex,
+        classSectionId: t.classSectionId,
+        language: languageOf(t.language),
+      },
       s.text,
     );
     try {
@@ -172,11 +182,24 @@ export class SearchService {
     classSectionIds: readonly string[],
     limit: number,
     mode: SearchMode,
+    /** Concept-graph query expansion (6.3): related terms, weighted below the user's own words. */
+    expansion: readonly string[] = [],
   ): Promise<SearchResponse> {
     const sections = new Set(classSectionIds);
     let degraded = false;
     const lists: Hit[][] = [];
-    if (mode !== 'semantic') lists.push(this.index.lexical(q, sections, CANDIDATES));
+    if (mode !== 'semantic') {
+      lists.push(
+        this.index.lexicalWeighted(
+          [
+            { text: q, weight: 1 },
+            ...expansion.map((text) => ({ text, weight: EXPANSION_WEIGHT })),
+          ],
+          sections,
+          CANDIDATES,
+        ),
+      );
+    }
     if (mode !== 'lexical') {
       try {
         const [qv] = await this.embeddings.embed([q], 'query');
@@ -188,7 +211,16 @@ export class SearchService {
       }
     }
     const ranked = lists.length === 1 ? (lists[0] ?? []) : reciprocalRankFusion(lists);
-    const terms = new Set(analyze(q));
+    const termsByLanguage = new Map<Lang, Set<string>>();
+    const termsFor = (lang: Lang): Set<string> => {
+      let t = termsByLanguage.get(lang);
+      if (!t)
+        termsByLanguage.set(
+          lang,
+          (t = new Set([q, ...expansion].flatMap((x) => analyze(x, lang)))),
+        );
+      return t;
+    };
     const results: SearchResult[] = [];
     for (const hit of ranked) {
       if (results.length >= limit) break;
@@ -205,7 +237,13 @@ export class SearchService {
         startMs: segment.startMs,
         endMs: segment.endMs,
         text: segment.text,
-        highlight: highlight(segment.text, terms),
+        highlight: highlight(
+          segment.text,
+          termsFor(doc.language ?? 'pt'),
+          280,
+          doc.language ?? 'pt',
+        ),
+        language: transcript.language,
         score: Math.round(hit.score * 1e6) / 1e6,
         ...(segment.speakerLabel ? { speakerLabel: segment.speakerLabel } : {}),
       });

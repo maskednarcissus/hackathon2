@@ -102,3 +102,23 @@ TypeScript · Fastify · Zod · PostgreSQL (snapshots) · BigQuery (Phase 5 expo
   Re-running a snapshot day replaces its facts.
 - `INTERNAL_API_TOKEN` (fallback `INTERNAL_TOKEN`) → accepted as `x-internal-token` (contract §4) or as a bearer token on
   the sync feeds and `POST /v1/snapshots/run`; an invalid `x-internal-token` → `401 internal_token_required`.
+
+## Phase 6.7 — Learning patterns
+
+`GET /v1/courses/:courseId/learning-patterns?from&to` and `GET /v1/institutions/:id/learning-patterns?from&to`
+(coordinator/admin of the institution; default 60 days). Computed live from audit engagement events
+(`lecture.viewed`, `lecture.searched`, `lecture.assistant_question` — actor type `student`, `metadata.classSectionId`,
+`metadata.scheduledClassId`), scheduled classes, calendar assessments and the enrolment mirror (`src/learning-patterns.ts`):
+
+- `engagementCurve` — views by days after each class (0…13, 14+), median days to first view, share viewed within 2 days;
+- `revisitBeforeAssessments` — share of enrolled students revisiting lectures in the 7 days before each assessment vs.
+  the week before (`lift`);
+- `difficultTopics` — lectures with the highest assistant-question density (questions per enrolled student), labelled
+  with the lecture title and first topics;
+- `searchesWithoutResults` — normalised terms of searches with no results (from transcript-management) and the zero-result rate;
+- `engagementVsAssessments` — daily views / searches / questions next to assessment days, plus the activity ratio in the
+  3 days before assessments vs. other days.
+
+Every student-derived figure requires ≥ 5 distinct students (`suppressed: true` and nulls otherwise); lectures and search
+terms below the cohort are omitted; no per-student output exists. The institution endpoint adds a per-course summary.
+No schema change: nothing is persisted.
