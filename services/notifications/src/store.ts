@@ -19,6 +19,14 @@ export interface IncidentFilter {
 }
 
 export interface AlertStore {
+  /**
+   * Inserts a new unresolved alert. Returns false when another unresolved alert with the same
+   * dedupe key already exists (Postgres: partial unique index `uq_alerts_open_dedupe`).
+   */
+  create(alert: Alert): Promise<boolean>;
+  /** Event-bus idempotency: true the first time an eventId is recorded. */
+  markEventProcessed(eventId: string, type: string): Promise<boolean>;
+  isEventProcessed(eventId: string): Promise<boolean>;
   /** Filtered scan; the SQL adapter pushes these predicates into WHERE clauses. */
   query(filter: IncidentFilter): Promise<Alert[]>;
   addComment(comment: IncidentComment): Promise<void>;
@@ -42,6 +50,25 @@ export class InMemoryAlertStore implements AlertStore {
   private readonly deliveryLog: Delivery[] = [];
   private readonly classMarks = new Set<string>();
   private readonly commentLog: IncidentComment[] = [];
+  private readonly processed = new Set<string>();
+
+  create(alert: Alert): Promise<boolean> {
+    for (const a of this.alerts.values()) {
+      if (a.dedupeKey === alert.dedupeKey && a.status !== 'resolved') return Promise.resolve(false);
+    }
+    this.alerts.set(alert.id, structuredClone(alert));
+    return Promise.resolve(true);
+  }
+
+  markEventProcessed(eventId: string): Promise<boolean> {
+    if (this.processed.has(eventId)) return Promise.resolve(false);
+    this.processed.add(eventId);
+    return Promise.resolve(true);
+  }
+
+  isEventProcessed(eventId: string): Promise<boolean> {
+    return Promise.resolve(this.processed.has(eventId));
+  }
   private readonly activityLog: IncidentActivity[] = [];
 
   query(f: IncidentFilter): Promise<Alert[]> {

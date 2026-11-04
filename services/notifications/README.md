@@ -137,10 +137,34 @@ _user_: with `IDENTITY_URL` set, `Authorization: Bearer <identity JWT>` is verif
 (vendored `src/vendor/jwt-verify.ts`) and `sub` must equal `{userId}`. _internal_: with
 `INTERNAL_API_TOKEN` set, `x-internal-token` is required.
 
+## Integration stage
+
+- **Persistence:** `DATABASE_URL` set → Postgres (`src/store.pg.ts`, `src/student/store.pg.ts`), unset →
+  in-memory. No DDL at start-up; schema = `data/migrations/V*.sql` + `data/migrations/pending/notifications.sql`.
+  Concurrent raises of the same condition are arbitrated by the partial unique index
+  `uq_alerts_open_dedupe` (insert-first, `ON CONFLICT … DO NOTHING`, then update); deferred deliveries
+  are claimed with `FOR UPDATE SKIP LOCKED`, so parallel flushers never double-send.
+- **Event bus:** `/v1/lifecycle-events` accepts the Pub/Sub push format
+  `{ message: { data: base64(envelope) }, subscription }` or a raw envelope; idempotent by `eventId`
+  (`notification_processed_events`), 2xx only after processing (503 → redelivery).
+  `calendar.event_published|updated` use the full event in `data.event` when present (calendar lookup otherwise).
+- **Scheduler:** `POST /v1/alerts/evaluate` with an empty body pulls `{ classWindows, devices }` from
+  academic-integration `GET /internal/v1/alert-context?now=` (`ACADEMIC_INTEGRATION_URL`).
+- **DSR:** `POST /internal/v1/dsr/{access|deletion|anonymization|correction|restriction}`
+  `{ subjectType, subjectId, requestId, institutionId, details? }` → `{ service: "notifications", status, items }`.
+  Student subjects are mapped to user ids through the enrollment mirror (plus `details.userId`).
+  Access exports inbox, preferences, push subscriptions (without keys) and mirror rows; deletion /
+  anonymisation deletes inbox (+ deliveries), preferences and subscriptions and erases the mirrored e-mail.
+- **Security:** `INTERNAL_API_TOKEN` → `x-internal-token` on `/internal/*`, `/v1/lifecycle-events`,
+  `/v1/alerts/evaluate`, `/v1/sync/*`, `/v1/reminders/run`, `/v1/notifications/flush-deferred`.
+- **Postgres tests:** `TEST_DATABASE_URL=postgresql://… pnpm test` runs `src/*.pg.test.ts` on a fresh
+  `ci_test_<random>` database (skipped otherwise).
+
 ## Configuration
 
 | Env                                                         | Meaning                                                                                                                                                            |
 | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `DATABASE_URL`                                              | Postgres persistence (unset → in-memory)                                                                                                                           |
 | `PORT`                                                      | default 4006                                                                                                                                                       |
 | `ALERT_RECIPIENTS_JSON`                                     | `{"default":[{"channel":"email","address":"noc@…","minSeverity":"high"}],"institutions":{"<uuid>":[…]}}` — channels: `email`, `webhook` (address = URL), `console` |
 | `MAIL_RELAY_URL`, `MAIL_RELAY_TOKEN`                        | HTTP mail relay: `POST {to, subject, text, metadata}`                                                                                                              |

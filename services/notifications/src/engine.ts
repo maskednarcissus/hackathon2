@@ -404,6 +404,8 @@ export class AlertEngine {
         slaDueAt: slaDueAt(nowIso, c.severity),
       };
       await this.locate(alert);
+      // Insert first: the partial unique index on dedupe_key arbitrates concurrent raises.
+      if (!(await store.create(alert))) return this.raise(c, now);
       await this.notify(alert, 'raised', now);
       await store.save(alert);
       await this.audit('alert.raised', alert, null, { rule: alert.rule, severity: alert.severity });

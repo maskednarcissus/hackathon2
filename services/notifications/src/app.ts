@@ -1,11 +1,19 @@
 import { timingSafeEqual } from 'node:crypto';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
-import { ZodError } from 'zod';
+import { z, ZodError } from 'zod';
 import { InMemoryAuditClient, type AuditClient } from './audit.js';
 import { InMemoryChannel, RecipientDirectory, type NotificationChannel } from './channels.js';
 import { AlertEngine } from './engine.js';
 import { HttpError, parse, sendError } from './http.js';
 import { createAdminAuth } from './incidents/auth.js';
+import {
+  AlertContextSchema,
+  DSR_TYPES,
+  DsrPayloadSchema,
+  handleDsr,
+  unwrapPushBody,
+  type AlertContextClient,
+} from './integration.js';
 import type { OrganizationClient } from './incidents/organization.js';
 import { registerIncidentRoutes } from './incidents/routes.js';
 import {
@@ -53,6 +61,9 @@ export interface AppDeps {
   organization?: OrganizationClient;
   /** Static bearer for admin routes (`ADMIN_API_TOKEN`); identity JWTs with coordinator/admin also accepted. */
   adminToken?: string;
+  // Integration stage
+  /** Feeds `/v1/alerts/evaluate` when the body carries no context (academic-integration). */
+  alertContext?: AlertContextClient;
 }
 
 export function buildApp(deps: AppDeps = {}): {
@@ -125,7 +136,11 @@ export function buildApp(deps: AppDeps = {}): {
    */
   app.post('/v1/lifecycle-events', async (req, reply) => {
     authorizeInternal(req);
-    const event = parse(EventEnvelopeSchema, req.body);
+    const event = parse(EventEnvelopeSchema, unwrapPushBody(req.body));
+    // idempotent by eventId (integration stage §2): redeliveries are acknowledged without effects
+    if (await store.isEventProcessed(event.eventId)) {
+      return reply.status(200).send({ eventId: event.eventId, duplicate: true });
+    }
     const result = await engine.handleEvent(event);
     let students: Awaited<ReturnType<StudentNotifier['handleEvent']>>;
     try {
@@ -138,6 +153,7 @@ export function buildApp(deps: AppDeps = {}): {
         'Student notification fan-out failed; retry',
       );
     }
+    await store.markEventProcessed(event.eventId, event.type);
     return reply.status(202).send({
       eventId: event.eventId,
       raised: result.raised.map((a) => a.id),
@@ -147,11 +163,46 @@ export function buildApp(deps: AppDeps = {}): {
     });
   });
 
+  /**
+   * Scheduler entry point (every minute). Without `classWindows`/`devices` in the body the
+   * context is pulled from academic-integration `/internal/v1/alert-context`.
+   */
   app.post('/v1/alerts/evaluate', async (req) => {
     authorizeInternal(req);
-    const input = parse(EvaluateRequestSchema, req.body ?? {});
+    const raw = (req.body ?? {}) as Record<string, unknown>;
+    const input = parse(EvaluateRequestSchema, raw);
+    if (raw.classWindows === undefined && raw.devices === undefined && deps.alertContext) {
+      const now = input.now ? new Date(input.now) : clock();
+      let context;
+      try {
+        context = AlertContextSchema.parse(await deps.alertContext.fetch(now));
+      } catch (err) {
+        app.log.error({ err }, 'alert context unavailable');
+        throw new HttpError(503, 'dependency_unavailable', 'Alert context unavailable; retry');
+      }
+      input.classWindows = context.classWindows;
+      input.devices = context.devices;
+    }
     const result = await engine.evaluate(input);
     return { raised: result.raised, updated: result.updated, resolved: result.resolved };
+  });
+
+  /** LGPD data subject rights handler called by identity (Phase 4 §6). */
+  app.post('/internal/v1/dsr/:type', async (req) => {
+    authorizeInternal(req);
+    const { type } = parse(z.object({ type: z.enum(DSR_TYPES) }), req.params);
+    const payload = parse(DsrPayloadSchema, req.body);
+    const result = await handleDsr(studentStore, type, payload);
+    app.log.info(
+      {
+        requestId: payload.requestId,
+        type,
+        subjectType: payload.subjectType,
+        status: result.status,
+      },
+      'dsr handled',
+    );
+    return result;
   });
 
   app.get('/v1/alerts', async (req) => {
