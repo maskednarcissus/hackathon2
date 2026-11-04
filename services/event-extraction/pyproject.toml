@@ -1,4 +1,4 @@
-﻿[project]
+[project]
 name = "ci-event-extraction"
 version = "0.1.0"
 description = "Classroom Intelligence — Event Extraction Service"
@@ -26,3 +26,7 @@ target-version = "py312"
 [tool.mypy]
 python_version = "3.12"
 strict = true
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

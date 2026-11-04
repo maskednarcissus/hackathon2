@@ -1,4 +1,4 @@
-﻿[project]
+[project]
 name = "ci-lecture-intelligence"
 version = "0.1.0"
 description = "Classroom Intelligence — Lecture Intelligence Service"
@@ -26,3 +26,7 @@ target-version = "py312"
 [tool.mypy]
 python_version = "3.12"
 strict = true
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

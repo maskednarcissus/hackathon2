@@ -1,4 +1,5 @@
-﻿"""Classroom Intelligence — Event Extraction Service."""
+"""Classroom Intelligence — Event Extraction Service."""
+
 from fastapi import FastAPI
 
 app = FastAPI(

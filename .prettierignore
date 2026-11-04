@@ -4,3 +4,4 @@ dist/
 build/
 *.generated.*
 pnpm-lock.yaml
+.venv/

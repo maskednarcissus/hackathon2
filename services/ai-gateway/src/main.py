@@ -1,4 +1,5 @@
-﻿"""Classroom Intelligence — AI Gateway Service."""
+"""Classroom Intelligence — AI Gateway Service."""
+
 from fastapi import FastAPI
 
 app = FastAPI(
