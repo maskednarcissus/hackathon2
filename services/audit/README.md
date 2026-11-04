@@ -49,3 +49,16 @@ pnpm --filter @ci/audit-service dev
 ## Technology
 
 TypeScript · Fastify · Zod · PostgreSQL (append-only)
+
+## Integration stage
+
+- `DATABASE_URL` → Postgres (`PgAuditRepository`, `PgContentReportRepository` in `src/repository.pg.ts`), unset → in-memory.
+  Appends take a transaction-scoped advisory lock on the tenant plus `SELECT … FOR UPDATE` on the chain head; the
+  `trg_audit_events_immutable` trigger rejects UPDATE/DELETE. Unknown tenants → `422 unknown_tenant`.
+  Cursor pagination uses `audit_events.position` (`data/migrations/pending/audit.sql`).
+- `EVENT_BUS_URL` → content report events go to `POST {EVENT_BUS_URL}/v1/topics/{type}:publish` (`src/platform/event-bus.ts`).
+- `INTERNAL_API_TOKEN` → required as `x-internal-token` on `/internal/*`.
+- `POST /internal/v1/dsr/{type}` (identity DataSubjectHandler): `access` exports the events where the subject is the actor
+  and their content reports; `deletion`/`anonymization` → `not_applicable` (audit records kept 7 years, legal basis in
+  the response) while authored content reports are anonymised; other types → `not_applicable`.
+- Tests: `src/app.pg.test.ts` runs when `TEST_DATABASE_URL` is set (fresh database, all migrations + pending).

@@ -10,7 +10,10 @@ import {
   type ContentReport,
   type ContentReportRepository,
 } from './content-reports.js';
+import { DSR_TYPES, DsrPayloadSchema, handleDsr } from './dsr.js';
 import { envelope, type EventPublisher } from './events.js';
+import { PG, pgCode } from './platform/pg.js';
+import { requireInternalToken } from './platform/internal-auth.js';
 import { GENESIS_HASH, chainHash } from './chain.js';
 import { ACTOR_TYPES, bodyOf, type AuditEvent, type AuditEventBody } from './domain.js';
 import { HttpError, installErrorHandler } from './errors.js';
@@ -24,6 +27,8 @@ export interface AuditDeps {
   repository: AuditRepository;
   contentReports?: ContentReportRepository;
   events?: EventPublisher;
+  /** INTERNAL_API_TOKEN: required as x-internal-token on /internal/* when set. */
+  internalToken?: string;
   clock?: Clock;
   idGenerator?: () => string;
   logger?: boolean;
@@ -119,6 +124,21 @@ export function buildApp(deps: AuditDeps): FastifyInstance {
     if (actionError) throw new HttpError(422, 'unknown_action', actionError);
     const tenantId = input.tenantId ?? null;
     const recordedAt = clock.now().toISOString();
+    try {
+      return await appendChecked(input, tenantId, recordedAt);
+    } catch (err) {
+      if (pgCode(err) === PG.foreignKeyViolation) {
+        throw new HttpError(422, 'unknown_tenant', `Institution ${tenantId ?? ''} does not exist`);
+      }
+      throw err;
+    }
+  }
+
+  function appendChecked(
+    input: z.output<typeof CreateAuditEventSchema>,
+    tenantId: string | null,
+    recordedAt: string,
+  ): Promise<AuditEvent> {
     return repo.append(tenantKeyOf(tenantId), (head, position) => {
       const body: AuditEventBody = {
         id: newId(),
@@ -220,8 +240,20 @@ export function buildApp(deps: AuditDeps): FastifyInstance {
     };
   });
 
-  // ---- Content reports (phase-3 contract §7, deliverable 3.15) ----
   const reports = deps.contentReports ?? new InMemoryContentReportRepository();
+
+  // ---- LGPD data subject requests (identity DataSubjectHandler, integration-stage §5) ----
+  app.post(
+    '/internal/v1/dsr/:type',
+    { preHandler: requireInternalToken(deps.internalToken) },
+    async (req) => {
+      const { type } = z.object({ type: z.enum(DSR_TYPES) }).parse(req.params);
+      const payload = DsrPayloadSchema.parse(req.body);
+      return handleDsr(type, payload, repo, reports);
+    },
+  );
+
+  // ---- Content reports (phase-3 contract §7, deliverable 3.15) ----
 
   async function emit(
     type: string,

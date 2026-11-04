@@ -25,6 +25,8 @@ export interface AuditRepository {
   /** All events of one tenant chain in sequence order. */
   chain(tenantKey: string): Promise<AuditEvent[]>;
   forRecording(recordingSessionId: string): Promise<AuditEvent[]>;
+  /** Events performed by an actor (DSR access requests), in insertion order. */
+  byActor(actorId: string, limit: number): Promise<AuditEvent[]>;
 }
 
 export const tenantKeyOf = (tenantId: string | null): string => tenantId ?? '__global__';
@@ -77,5 +79,9 @@ export class InMemoryAuditRepository implements AuditRepository {
           e.metadata?.['recordingSessionId'] === recordingSessionId,
       ),
     );
+  }
+
+  byActor(actorId: string, limit: number): Promise<AuditEvent[]> {
+    return Promise.resolve(this.events.filter((e) => e.actorId === actorId).slice(0, limit));
   }
 }

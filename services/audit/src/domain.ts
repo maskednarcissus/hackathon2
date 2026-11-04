@@ -3,6 +3,7 @@ export const ACTOR_TYPES = [
   'professor',
   'coordinator',
   'admin',
+  'group_executive',
   'system',
   'device',
 ] as const;

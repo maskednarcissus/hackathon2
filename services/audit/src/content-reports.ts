@@ -85,7 +85,12 @@ export interface ContentReportRepository {
     status?: 'open' | 'resolved';
     limit: number;
   }): Promise<ContentReport[]>;
+  byReporter(reporterId: string): Promise<ContentReport[]>;
+  /** LGPD deletion: replaces the reporter with the anonymous id and drops free text; returns count. */
+  anonymiseReporter(reporterId: string): Promise<number>;
 }
+
+export const ANONYMOUS_SUBJECT_ID = '00000000-0000-0000-0000-000000000000';
 
 export class InMemoryContentReportRepository implements ContentReportRepository {
   private readonly reports = new Map<string, ContentReport>();
@@ -132,5 +137,19 @@ export class InMemoryContentReportRepository implements ContentReportRepository 
         .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
         .slice(0, q.limit),
     );
+  }
+
+  byReporter(reporterId: string): Promise<ContentReport[]> {
+    return Promise.resolve([...this.reports.values()].filter((r) => r.reporterId === reporterId));
+  }
+
+  anonymiseReporter(reporterId: string): Promise<number> {
+    let n = 0;
+    for (const r of this.reports.values()) {
+      if (r.reporterId !== reporterId) continue;
+      this.reports.set(r.id, { ...r, reporterId: ANONYMOUS_SUBJECT_ID, details: null });
+      n++;
+    }
+    return Promise.resolve(n);
   }
 }

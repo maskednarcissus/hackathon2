@@ -226,4 +226,13 @@ describe('integration shapes', () => {
       expect(r.statusCode, action).toBe(201);
     }
   });
+  it('accepts the group_executive actor type', async () => {
+    const { app } = setup();
+    const r = await post(app, {
+      actorType: 'group_executive',
+      action: 'lecture.viewed',
+      resourceType: 'report',
+    });
+    expect(r.statusCode).toBe(201);
+  });
 });
