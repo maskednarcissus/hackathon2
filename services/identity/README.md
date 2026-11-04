@@ -26,6 +26,33 @@ TypeScript · Fastify · node:crypto (scrypt, Ed25519, RSA) · zod — port **40
 
 Errors are always `{ "error": { "code", "message", "details?" } }`.
 
+## LGPD data subject rights (Phase 4 · 4.11)
+
+Contract: [`phase-4-institutional-intelligence.md` §6](../../docs/architecture/phase-4-institutional-intelligence.md).
+
+| Method | Path                                   | Who                                                                      | Purpose                                                                                                                                                                |
+| ------ | -------------------------------------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| POST   | `/v1/dsr`                              | the subject, or coordinator/admin of the institution (or internal token) | `{subjectType: student\|professor\|user, subjectId, institutionId, type, requestedBy, channel, details?}` → `{id, status: "received", dueAt}` (+15 days, LGPD art. 19) |
+| GET    | `/v1/dsr?status&institutionId&overdue` | staff (own institution) / internal                                       | List with `overdue`, `daysRemaining` and a summary                                                                                                                     |
+| GET    | `/v1/dsr/:id`                          | staff or the subject                                                     | Request, per-service `results`, `pendingServices`, `timeline`                                                                                                          |
+| GET    | `/v1/dsr/:id/export`                   | staff or the subject                                                     | Access-request JSON bundle (`ci-dsr-access-export/v1`)                                                                                                                 |
+| POST   | `/v1/dsr/:id/verify`                   | staff                                                                    | `received → verifying` (identity of the subject verified)                                                                                                              |
+| POST   | `/v1/dsr/:id/execute`                  | staff                                                                    | `verifying/in_progress → in_progress → completed`; re-running only retries failed handlers                                                                             |
+| POST   | `/v1/dsr/:id/reject`                   | staff                                                                    | `{reason}`; only before execution                                                                                                                                      |
+
+- Execution fans out to `DataSubjectHandler`s: the services in `DSR_HANDLER_URLS`
+  (`audit=http://audit:4011,notifications=http://notifications:4006`, called as
+  `POST {url}/internal/v1/dsr/{type}` with `X-Internal-Token`) plus identity's own handler. Any failed handler
+  keeps the request `in_progress` (`dsr.execution_partial`); for deletion/anonymisation identity runs **last**, only
+  after every other service succeeded, so the account is never erased while other data remains.
+- Identity handler — access: profile, roles, links, credential metadata, login-history summary; deletion /
+  anonymisation: credentials and login history removed, refresh tokens revoked, account disabled and turned into an
+  anonymised tombstone (`anon-<id>@anonymized.invalid`); restriction: account disabled; correction: `details.name` /
+  `details.email` applied.
+- Access exports are stored through `ExportStore` (in-memory, or `DSR_EXPORT_DIR` files with mode `0600`; a CMEK
+  bucket adapter fits the same interface). Audit: `dsr.received`, `dsr.verified`, `dsr.execution_started`,
+  `dsr.execution_partial`, `dsr.completed`, `dsr.rejected` — identifiers only, never the subject's data.
+
 ## Security model
 
 - **Passwords** — scrypt `N=2^15, r=8, p=1`, 16-byte salt, stored as `scrypt$N$r$p$salt$hash`.
@@ -75,15 +102,17 @@ rotation works by publishing the new key while keeping the old one in `IDENTITY_
 | `IDENTITY_ISSUER`                                                                    | `ci-identity` |                                                                                |
 | `IDENTITY_INTERNAL_TOKEN`                                                            | —             | Shared secret for `X-Internal-Token` service calls (sync, authorize)           |
 | `AUDIT_SERVICE_URL`                                                                  | —             | e.g. `http://localhost:4011`; unset → in-memory audit                          |
+| `DSR_HANDLER_URLS`                                                                   | —             | `name=url` pairs of services implementing `/internal/v1/dsr/{type}`            |
+| `DSR_EXPORT_DIR`                                                                     | —             | Directory for access-request bundles; unset → in-memory                        |
 | `IDENTITY_BOOTSTRAP_ADMIN_EMAIL` / `_PASSWORD` / `IDENTITY_BOOTSTRAP_INSTITUTION_ID` | —             | Creates a first admin at start-up                                              |
 
 ## Development
 
 ```bash
-pnpm --filter @ci/identity-service test       # 61 tests (vitest + app.inject)
+pnpm --filter @ci/identity-service test       # 83 tests (vitest + app.inject)
 pnpm --filter @ci/identity-service dev
 ```
 
 Repositories are interfaces with in-memory implementations (`src/repositories.ts`); a PostgreSQL adapter is
 the next step (tables: `users`, `user_credentials`, `refresh_tokens`, `revoked_access_tokens`,
-`identity_provider_configs`, `oidc_auth_states`, `access_section_mirror`, `access_enrollment_mirror`).
+`identity_provider_configs`, `oidc_auth_states`, `access_section_mirror`, `access_enrollment_mirror`, `login_events`, `dsr_requests`, `dsr_service_results`, `dsr_events`).

@@ -12,6 +12,8 @@ import {
   RESOURCE_TYPES,
   type AuthorizationDecision,
 } from './authorization.js';
+import { InMemoryDsrRepository, InMemoryExportStore, type DsrDeps } from './dsr.js';
+import { registerDsrRoutes } from './dsr-routes.js';
 import { AppError, forbidden, parseOrThrow, registerErrorHandler, unauthorized } from './errors.js';
 import {
   DEFAULT_AUDIENCE,
@@ -68,6 +70,8 @@ export interface AppDeps {
   audit: AuditClient;
   identityProviders: IdentityProviderRegistry;
   config: IdentityConfig;
+  /** LGPD data subject rights workflow (Phase 4 · 4.11). */
+  dsr: DsrDeps;
   logger?: FastifyBaseLogger | boolean;
 }
 
@@ -87,6 +91,11 @@ export function createDefaultDeps(overrides: Partial<AppDeps> = {}): AppDeps {
         fetch: globalThis.fetch,
       }),
     config: { ...DEFAULT_CONFIG, ...overrides.config },
+    dsr: overrides.dsr ?? {
+      repo: new InMemoryDsrRepository(),
+      handlers: [],
+      exportStore: new InMemoryExportStore(),
+    },
     ...(overrides.logger !== undefined ? { logger: overrides.logger } : {}),
   };
 }
@@ -354,6 +363,15 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
           });
         }
       }
+      if (user) {
+        await repos.loginEvents.record({
+          userId: user.id,
+          institutionId: user.institutionId,
+          at: now,
+          method: 'password',
+          outcome: 'failed',
+        });
+      }
       await audit.record({
         ...auditBase,
         action: 'auth.login_failed',
@@ -369,6 +387,13 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       await repos.credentials.save({ ...credential, failedAttempts: 0, lockedUntil: null });
     }
     const session = await tokens.issueSession(user);
+    await repos.loginEvents.record({
+      userId: user.id,
+      institutionId: user.institutionId,
+      at: now,
+      method: 'password',
+      outcome: 'succeeded',
+    });
     await audit.record({
       ...auditBase,
       action: 'auth.login_succeeded',
@@ -705,6 +730,13 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       throw forbidden('No active account is provisioned for this identity', 'user_not_provisioned');
     }
     const session = await tokens.issueSession(user);
+    await repos.loginEvents.record({
+      userId: user.id,
+      institutionId,
+      at: clock.now(),
+      method: 'oidc',
+      outcome: 'succeeded',
+    });
     await audit.record({
       tenantId: institutionId,
       actorId: user.id,
@@ -721,6 +753,15 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       expiresIn: session.expiresIn,
       user: publicUser(user),
     };
+  });
+
+  registerDsrRoutes(app, {
+    repos,
+    clock,
+    audit,
+    dsr: deps.dsr,
+    hasInternalToken,
+    optionalBearer,
   });
 
   return app;

@@ -2,6 +2,13 @@
 import pino from 'pino';
 import { HttpAuditClient, InMemoryAuditClient } from './audit-client.js';
 import { buildApp, createDefaultDeps, DEFAULT_CONFIG } from './app.js';
+import {
+  FileSystemExportStore,
+  HttpDataSubjectHandler,
+  InMemoryDsrRepository,
+  InMemoryExportStore,
+  parseHandlerUrls,
+} from './dsr.js';
 import { KeyStore, loadSigningKey } from './keys.js';
 import { hashPassword } from './password.js';
 import { createInMemoryRepositories } from './repositories.js';
@@ -34,6 +41,16 @@ async function main(): Promise<void> {
       ...DEFAULT_CONFIG,
       issuer: env['IDENTITY_ISSUER'] ?? DEFAULT_CONFIG.issuer,
       internalToken: env['IDENTITY_INTERNAL_TOKEN'],
+    },
+    dsr: {
+      repo: new InMemoryDsrRepository(),
+      handlers: parseHandlerUrls(env['DSR_HANDLER_URLS']).map(
+        ({ name, url }) =>
+          new HttpDataSubjectHandler(name, url, { internalToken: env['IDENTITY_INTERNAL_TOKEN'] }),
+      ),
+      exportStore: env['DSR_EXPORT_DIR']
+        ? new FileSystemExportStore(env['DSR_EXPORT_DIR'])
+        : new InMemoryExportStore(),
     },
     logger,
   });

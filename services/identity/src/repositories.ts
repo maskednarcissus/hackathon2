@@ -84,11 +84,19 @@ export interface UserRepository {
   update(user: UserRecord): Promise<void>;
   findById(id: string): Promise<UserRecord | undefined>;
   findByEmail(institutionId: string, email: string): Promise<UserRecord | undefined>;
+  /** Finds the account linked to an academic person (studentId / professorId) in the institution. */
+  findByPersonId(
+    institutionId: string,
+    kind: 'student' | 'professor',
+    personId: string,
+  ): Promise<UserRecord | undefined>;
 }
 
 export interface CredentialRepository {
   get(userId: string): Promise<CredentialRecord | undefined>;
   save(record: CredentialRecord): Promise<void>;
+  /** Returns true when a credential existed. */
+  delete(userId: string): Promise<boolean>;
 }
 
 export interface RefreshTokenRepository {
@@ -97,6 +105,22 @@ export interface RefreshTokenRepository {
   findByHash(tokenHash: string): Promise<RefreshTokenRecord | undefined>;
   /** Revokes every non-revoked token of the family; returns how many were revoked. */
   revokeFamily(familyId: string, at: Date): Promise<number>;
+  /** Revokes every non-revoked token of the user; returns how many were revoked. */
+  revokeAllForUser(userId: string, at: Date): Promise<number>;
+}
+
+export interface LoginEventRecord {
+  userId: string;
+  institutionId: string;
+  at: Date;
+  method: 'password' | 'oidc';
+  outcome: 'succeeded' | 'failed';
+}
+
+export interface LoginEventRepository {
+  record(event: LoginEventRecord): Promise<void>;
+  listByUser(userId: string): Promise<LoginEventRecord[]>;
+  deleteByUser(userId: string): Promise<number>;
 }
 
 export interface AccessMirrorRepository {
@@ -136,6 +160,7 @@ export interface Repositories {
   oidcConfigs: OidcConfigRepository;
   oidcStates: OidcStateRepository;
   revokedAccessTokens: RevokedAccessTokenRepository;
+  loginEvents: LoginEventRepository;
 }
 
 const clone = <T>(value: T): T => structuredClone(value);
@@ -152,6 +177,17 @@ class InMemoryUsers implements UserRepository {
   async findById(id: string): Promise<UserRecord | undefined> {
     const u = this.byId.get(id);
     return u ? clone(u) : undefined;
+  }
+  async findByPersonId(
+    institutionId: string,
+    kind: 'student' | 'professor',
+    personId: string,
+  ): Promise<UserRecord | undefined> {
+    for (const u of this.byId.values()) {
+      if (u.institutionId !== institutionId) continue;
+      if ((kind === 'student' ? u.studentId : u.professorId) === personId) return clone(u);
+    }
+    return undefined;
   }
   async findByEmail(institutionId: string, email: string): Promise<UserRecord | undefined> {
     const needle = email.trim().toLowerCase();
@@ -171,6 +207,9 @@ class InMemoryCredentials implements CredentialRepository {
   async save(record: CredentialRecord): Promise<void> {
     this.items.set(record.userId, clone(record));
   }
+  async delete(userId: string): Promise<boolean> {
+    return this.items.delete(userId);
+  }
 }
 
 class InMemoryRefreshTokens implements RefreshTokenRepository {
@@ -184,6 +223,16 @@ class InMemoryRefreshTokens implements RefreshTokenRepository {
   async findByHash(tokenHash: string): Promise<RefreshTokenRecord | undefined> {
     for (const r of this.items.values()) if (r.tokenHash === tokenHash) return clone(r);
     return undefined;
+  }
+  async revokeAllForUser(userId: string, at: Date): Promise<number> {
+    let count = 0;
+    for (const r of this.items.values()) {
+      if (r.userId === userId && r.revokedAt === null) {
+        r.revokedAt = at;
+        count += 1;
+      }
+    }
+    return count;
   }
   async revokeFamily(familyId: string, at: Date): Promise<number> {
     let count = 0;
@@ -275,6 +324,21 @@ class InMemoryRevokedAccessTokens implements RevokedAccessTokenRepository {
   }
 }
 
+class InMemoryLoginEvents implements LoginEventRepository {
+  private items: LoginEventRecord[] = [];
+  async record(event: LoginEventRecord): Promise<void> {
+    this.items.push(clone(event));
+  }
+  async listByUser(userId: string): Promise<LoginEventRecord[]> {
+    return this.items.filter((e) => e.userId === userId).map(clone);
+  }
+  async deleteByUser(userId: string): Promise<number> {
+    const before = this.items.length;
+    this.items = this.items.filter((e) => e.userId !== userId);
+    return before - this.items.length;
+  }
+}
+
 export function createInMemoryRepositories(): Repositories {
   return {
     users: new InMemoryUsers(),
@@ -284,5 +348,6 @@ export function createInMemoryRepositories(): Repositories {
     oidcConfigs: new InMemoryOidcConfigs(),
     oidcStates: new InMemoryOidcStates(),
     revokedAccessTokens: new InMemoryRevokedAccessTokens(),
+    loginEvents: new InMemoryLoginEvents(),
   };
 }

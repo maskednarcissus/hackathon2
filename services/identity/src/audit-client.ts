@@ -12,7 +12,13 @@ export interface AuditEventInput {
     | 'auth.locked'
     | 'auth.refresh_reuse_detected'
     | 'auth.logout'
-    | 'auth.user_created';
+    | 'auth.user_created'
+    | 'dsr.received'
+    | 'dsr.verified'
+    | 'dsr.execution_started'
+    | 'dsr.execution_partial'
+    | 'dsr.completed'
+    | 'dsr.rejected';
   resourceType: string;
   resourceId?: string;
   metadata?: Record<string, unknown>;
