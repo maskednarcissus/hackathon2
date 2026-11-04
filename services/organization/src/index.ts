@@ -1,14 +1,11 @@
-﻿import Fastify from 'fastify';
+import { buildApp } from './app.js';
 
-const app = Fastify({ logger: true });
+const port = Number(process.env['PORT'] ?? 4002);
+const host = process.env['HOST'] ?? '0.0.0.0';
 
-app.get('/health', async () => ({
-  status: 'ok',
-  service: 'organization',
-}));
+const app = buildApp({ logger: { level: process.env['LOG_LEVEL'] ?? 'info' } });
 
-const start = async (): Promise<void> => {
-  await app.listen({ port: 4002, host: '0.0.0.0' });
-};
-
-void start();
+app.listen({ port, host }).catch((err: unknown) => {
+  app.log.error(err);
+  process.exit(1);
+});
