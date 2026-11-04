@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -28,17 +30,75 @@ class SystemClock:
         return datetime.now(UTC)
 
 
+@dataclass(frozen=True)
+class RetentionCandidate:
+    id: str
+    created_at: datetime
+    class_section_id: str
+    recording_session_id: str | None
+    recording_policy_id: str | None
+    subject_ids: list[str]
+
+
 class EventRepository(Protocol):
     async def add(self, event: ExtractedEvent) -> None: ...
     async def update(self, event: ExtractedEvent) -> None: ...
     async def get(self, event_id: str) -> ExtractedEvent | None: ...
     async def list_by_section(self, class_section_id: str) -> list[ExtractedEvent]: ...
     async def list_all(self) -> list[ExtractedEvent]: ...
+    async def list_review(
+        self, statuses: list[str], professor_id: str | None, class_section_id: str | None
+    ) -> list[ExtractedEvent]: ...
+    def lock_section(self, class_section_id: str) -> AbstractAsyncContextManager[None]:
+        """Serialise dedup + insert for one class section (atomic in Postgres)."""
+        ...
+
+    async def retention_candidates(
+        self, institution_id: str, older_than: datetime, limit: int
+    ) -> list[RetentionCandidate]: ...
+    async def delete_many(self, ids: list[str]) -> list[str]: ...
 
 
 class InMemoryEventRepository:
     def __init__(self) -> None:
         self._events: dict[str, ExtractedEvent] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    @asynccontextmanager
+    async def lock_section(self, class_section_id: str) -> AsyncIterator[None]:
+        lock = self._locks.setdefault(class_section_id, asyncio.Lock())
+        async with lock:
+            yield
+
+    async def retention_candidates(
+        self, institution_id: str, older_than: datetime, limit: int
+    ) -> list[RetentionCandidate]:
+        due = sorted(
+            (
+                e
+                for e in self._events.values()
+                if e.institution_id == institution_id and e.created_at < older_than
+            ),
+            key=lambda e: e.created_at,
+        )
+        return [
+            RetentionCandidate(
+                id=e.id,
+                created_at=e.created_at,
+                class_section_id=e.class_section_id,
+                recording_session_id=e.source.recording_session_id,
+                recording_policy_id=None,
+                subject_ids=[e.professor_id] if e.professor_id else [],
+            )
+            for e in due[:limit]
+        ]
+
+    async def delete_many(self, ids: list[str]) -> list[str]:
+        deleted = [i for i in ids if self._events.pop(i, None) is not None]
+        for e in self._events.values():
+            if e.duplicate_of in deleted:
+                e.duplicate_of = None
+        return deleted
 
     async def add(self, event: ExtractedEvent) -> None:
         self._events[event.id] = event.model_copy(deep=True)
@@ -61,6 +121,17 @@ class InMemoryEventRepository:
 
     async def list_all(self) -> list[ExtractedEvent]:
         return [e.model_copy(deep=True) for e in self._events.values()]
+
+    async def list_review(
+        self, statuses: list[str], professor_id: str | None, class_section_id: str | None
+    ) -> list[ExtractedEvent]:
+        return [
+            e.model_copy(deep=True)
+            for e in self._events.values()
+            if e.confirmation_status in statuses
+            and (professor_id is None or e.professor_id == professor_id)
+            and (class_section_id is None or e.class_section_id == class_section_id)
+        ]
 
 
 class GatewayClient(Protocol):
@@ -243,3 +314,21 @@ class StaticPolicyProvider:
 
     async def get_policy(self, institution_id: str) -> PublicationPolicy:
         return self.per_institution.get(institution_id, self.default)
+
+
+class ProcessedEventStore(Protocol):
+    """Idempotent consumption of bus deliveries (V002 ``processed_events``)."""
+
+    async def is_processed(self, event_id: str, consumer: str) -> bool: ...
+    async def mark_processed(self, event_id: str, consumer: str) -> None: ...
+
+
+class InMemoryProcessedEventStore:
+    def __init__(self) -> None:
+        self.processed: set[tuple[str, str]] = set()
+
+    async def is_processed(self, event_id: str, consumer: str) -> bool:
+        return (event_id, consumer) in self.processed
+
+    async def mark_processed(self, event_id: str, consumer: str) -> None:
+        self.processed.add((event_id, consumer))

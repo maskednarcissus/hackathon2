@@ -70,8 +70,35 @@ conflicts. Sections without a known professor go to `awaiting_admin`.
 | `EVENT_PUBLISHER=pubsub` + `GCP_PROJECT_ID`   | Pub/Sub publishing (extra `gcp`) |
 | `EVENT_EXTRACTION_PROMPT_VERSION`             | gateway's active version         |
 
-> The event store is in-memory in this phase (see the V002 migration notes for the Postgres
-> columns it maps to).
+| `DATABASE_URL` | Postgres (psycopg 3 pool); unset → in-memory store |
+| `DATABASE_POOL_MAX` | `10` |
+| `EVENT_BUS_URL` | HTTP dev bus publisher (`POST {url}/v1/topics/{type}:publish`) |
+| `PUBSUB_PROJECT_ID` | Google Pub/Sub publisher (extra `gcp`) when no `EVENT_BUS_URL` |
+| `INTERNAL_API_TOKEN` | Required as `x-internal-token` on `/internal/*` and the push endpoint (and sent on outgoing calls); unset → open, warning logged |
+
+## Integration stage
+
+* **Persistence** (`adapters/postgres.py`): `extracted_events` (V001 + V003 columns),
+  `extracted_event_mentions`, `event_changes`, `event_publication_policies` (V003; institutions
+  without a row use the env default policy), `processed_events` (V002). Schema gaps:
+  `data/migrations/pending/event-extraction.sql`. The service never runs DDL.
+* **Dedup under concurrency**: the store phase of an extraction (dedup against stored events,
+  inserts, auto-publication) runs in one transaction holding
+  `pg_advisory_xact_lock(hashtextextended('extracted_events:section:<id>', 0))`; audit records
+  and bus events are emitted only after that transaction commits (outbox).
+* **Bus subscriber** `POST /v1/events/transcript-ready`: raw envelope or Pub/Sub push
+  (`{message:{data:base64(envelope), messageId}}`); idempotent by `eventId` (fallback
+  `messageId`); `transcript.created`/`diarization.completed` extract once per transcript,
+  `transcript.corrected` re-extracts (repeats merge without duplicate mentions). Errors return
+  non-2xx and nothing is marked processed, so the bus retries.
+* **Retention** (kind `extracted_event`, Phase 4 §5):
+  `GET /internal/v1/retention/candidates?institutionId&olderThan&kind&limit` →
+  `{candidates:[{id, createdAt, classSectionId, recordingSessionId, recordingPolicyId, subjectIds}]}`;
+  `POST /internal/v1/retention/delete {ids, kind, jobId}` → `{deletedIds}` (mentions and change
+  history cascade; proposals pointing at a deleted event keep living with `duplicateOf: null`).
+
+Postgres tests (`tests/test_repository_pg.py`) run only with `TEST_DATABASE_URL` (admin URL):
+they create `ci_test_<random>`, apply `V*.sql` + the pending file, and drop it afterwards.
 
 ## Development
 

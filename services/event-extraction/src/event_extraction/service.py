@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 import uuid
+from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from . import keywords as kw
 from .dates import DateResolver
@@ -42,7 +43,9 @@ from .ports import (
     EventPublisher,
     EventRepository,
     GatewayClient,
+    InMemoryProcessedEventStore,
     PolicyProvider,
+    ProcessedEventStore,
     SystemClock,
     TranscriptClient,
     UpstreamError,
@@ -52,7 +55,10 @@ from .validation import compute_confidence, validate_draft
 
 log = logging.getLogger("event_extraction")
 
-PROCESSING_VERSION = "event-extraction/2.0.0"
+PROCESSING_VERSION = "event-extraction/2.1.0"
+_OUTBOX: ContextVar[list[tuple[str, tuple[Any, ...], dict[str, Any]]] | None] = ContextVar(
+    "event_extraction_outbox", default=None
+)
 REVIEWABLE: set[str] = {"suggested", "awaiting_professor", "awaiting_admin"}
 ActorRole = Literal["professor", "admin", "coordinator", "system"]
 
@@ -85,6 +91,16 @@ class Dependencies:
     clock: Clock = field(default_factory=SystemClock)
     extractor: ExtractorKind = "heuristic"
     prompt_version: str | None = None
+    processed: ProcessedEventStore = field(default_factory=InMemoryProcessedEventStore)
+    internal_token: str | None = None
+    lifecycle: Lifecycle | None = None
+
+
+class Lifecycle(Protocol):
+    """Resources opened at application start-up (e.g. the Postgres pool)."""
+
+    async def start(self) -> None: ...
+    async def stop(self) -> None: ...
 
 
 def _is_specific(title: str) -> bool:
@@ -139,67 +155,90 @@ class EventExtractionService:
                 twin.mentions.append(self._mention(ev, now))
 
         policy = await self.d.policies.get_policy(ctx.institution_id)
-        existing = [
-            e
-            for e in await self.d.repository.list_by_section(ctx.class_section_id)
-            if e.confirmation_status != "rejected"
-        ]
         result_events: list[ExtractedEvent] = []
         dedups: list[Deduplication] = []
         published = 0
-        for ev in unique:
-            twin = next(
-                (e for e in existing if e.duplicate_of is None and self._same_event(ev, e)), None
-            )
-            if twin is not None:
-                twin.mentions.append(self._mention(ev, now))
-                twin.mentions.extend(ev.mentions)
-                twin.updated_at = now
-                await self.d.repository.update(twin)
-                dedups.append(Deduplication(event_id=ev.id, merged_into=twin.id, kind="repeat"))
-                await self._audit("event.deduplicated", twin, None, {"mergedMention": ev.id})
-                continue
-            target = next(
-                (e for e in existing if e.duplicate_of is None and self._is_date_change(ev, e)),
-                None,
-            )
-            if target is not None:
-                ev.duplicate_of = target.id
-                ev.flags.append(f"duplicate_of:{target.id}")
-                ev.proposed_change = ProposedChange(
-                    target_event_id=target.id,
-                    previous_value=target.event_date,
-                    proposed_value=ev.event_date,
-                )
-                dedups.append(
-                    Deduplication(
-                        event_id=ev.id, merged_into=target.id, kind="date_change_proposal"
+        outbox: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
+        token = _OUTBOX.set(outbox)
+        try:
+            # Dedup against stored events must be serialised per section: the Postgres
+            # repository takes a transaction-scoped advisory lock here.
+            async with self.d.repository.lock_section(ctx.class_section_id):
+                existing = [
+                    e
+                    for e in await self.d.repository.list_by_section(ctx.class_section_id)
+                    if e.confirmation_status != "rejected"
+                ]
+                for ev in unique:
+                    twin = next(
+                        (e for e in existing if e.duplicate_of is None and self._same_event(ev, e)),
+                        None,
                     )
-                )
+                    if twin is not None:
+                        for mention in [self._mention(ev, now), *ev.mentions]:
+                            self._add_mention(twin, mention)
+                        twin.updated_at = now
+                        await self.d.repository.update(twin)
+                        dedups.append(
+                            Deduplication(event_id=ev.id, merged_into=twin.id, kind="repeat")
+                        )
+                        await self._audit(
+                            "event.deduplicated", twin, None, {"mergedMention": ev.id}
+                        )
+                        continue
+                    target = next(
+                        (
+                            e
+                            for e in existing
+                            if e.duplicate_of is None and self._is_date_change(ev, e)
+                        ),
+                        None,
+                    )
+                    if target is not None:
+                        ev.duplicate_of = target.id
+                        ev.flags.append(f"duplicate_of:{target.id}")
+                        ev.proposed_change = ProposedChange(
+                            target_event_id=target.id,
+                            previous_value=target.event_date,
+                            proposed_value=ev.event_date,
+                        )
+                        dedups.append(
+                            Deduplication(
+                                event_id=ev.id, merged_into=target.id, kind="date_change_proposal"
+                            )
+                        )
 
-            await self._check_conflicts(ev)
-            auto = self._decide_status(ev, policy, ctx)
-            await self.d.repository.add(ev)
-            existing.append(ev)
-            await self._audit(
-                "event.extracted",
-                ev,
-                None,
-                {
-                    "transcriptId": ev.transcript_id,
-                    "type": ev.type,
-                    "confidence": ev.confidence.overall,
-                    "status": ev.confirmation_status,
-                    "flags": ev.flags,
-                },
-            )
-            if auto:
-                await self._publish(ev, Actor("system", "system"), auto=True)
-                published += 1
-            result_events.append(ev)
+                    await self._check_conflicts(ev)
+                    auto = self._decide_status(ev, policy, ctx)
+                    await self.d.repository.add(ev)
+                    existing.append(ev)
+                    await self._audit(
+                        "event.extracted",
+                        ev,
+                        None,
+                        {
+                            "transcriptId": ev.transcript_id,
+                            "type": ev.type,
+                            "confidence": ev.confidence.overall,
+                            "status": ev.confirmation_status,
+                            "flags": ev.flags,
+                        },
+                    )
+                    if auto:
+                        await self._publish(ev, Actor("system", "system"), auto=True)
+                        published += 1
+                    result_events.append(ev)
+
+        finally:
+            _OUTBOX.reset(token)
+        for kind_, args, kwargs in outbox:
+            if kind_ == "audit":
+                await self._audit_now(*args, **kwargs)
+            else:
+                await self._emit_now(*args, **kwargs)
 
         awaiting = sum(1 for e in result_events if e.confirmation_status.startswith("awaiting"))
-        await self.d.publisher.publish(
+        await self._emit(
             "events.extracted",
             {
                 "transcriptId": req.transcript_id,
@@ -359,6 +398,22 @@ class EventExtractionService:
         )
 
     @staticmethod
+    def _add_mention(target: ExtractedEvent, mention: Mention) -> None:
+        """Record a repeat, ignoring re-extractions of the same class segment."""
+        if (
+            target.scheduled_class_id == mention.scheduled_class_id
+            and target.source.segment_index == mention.segment_index
+        ):
+            return
+        if any(
+            m.scheduled_class_id == mention.scheduled_class_id
+            and m.segment_index == mention.segment_index
+            for m in target.mentions
+        ):
+            return
+        target.mentions.append(mention)
+
+    @staticmethod
     def _same_event(a: ExtractedEvent, b: ExtractedEvent) -> bool:
         if a.class_section_id != b.class_section_id or a.type != b.type:
             return False
@@ -442,14 +497,7 @@ class EventExtractionService:
     async def review_queue(
         self, professor_id: str | None, statuses: list[str], class_section_id: str | None
     ) -> list[ExtractedEvent]:
-        events = await self.d.repository.list_all()
-        selected = [
-            e
-            for e in events
-            if e.confirmation_status in statuses
-            and (professor_id is None or e.professor_id == professor_id)
-            and (class_section_id is None or e.class_section_id == class_section_id)
-        ]
+        selected = await self.d.repository.list_review(statuses, professor_id, class_section_id)
         return sorted(
             selected,
             key=lambda e: (e.event_date is None, e.event_date or "", e.created_at),
@@ -521,7 +569,7 @@ class EventExtractionService:
         self._set_status(ev, actor, "confirmed", notes)
         await self.d.repository.update(ev)
         await self._audit("event.confirmed", ev, actor, {"notes": notes})
-        await self.d.publisher.publish(
+        await self._emit(
             "event.confirmed", {"eventId": ev.id, "actorId": actor.actor_id}, ev.institution_id
         )
         if policy.publish_on_confirm:
@@ -564,7 +612,7 @@ class EventExtractionService:
         )
         if target.confirmation_status == "published":
             await self._publish(target, actor)
-            await self.d.publisher.publish(
+            await self._emit(
                 "event.updated",
                 {"eventId": target.id, "actorId": actor.actor_id, "field": "eventDate"},
                 target.institution_id,
@@ -608,7 +656,7 @@ class EventExtractionService:
         if ev.confirmation_status == "published":
             await self.d.repository.update(ev)
             await self._publish(ev, actor)
-            await self.d.publisher.publish(
+            await self._emit(
                 "event.updated",
                 {"eventId": ev.id, "actorId": actor.actor_id, "fields": list(applied)},
                 ev.institution_id,
@@ -630,7 +678,7 @@ class EventExtractionService:
         self._set_status(ev, actor, "rejected", reason)
         await self.d.repository.update(ev)
         await self._audit("event.rejected", ev, actor, {"reason": reason})
-        await self.d.publisher.publish(
+        await self._emit(
             "event.rejected",
             {"eventId": ev.id, "actorId": actor.actor_id, "reason": reason},
             ev.institution_id,
@@ -701,7 +749,7 @@ class EventExtractionService:
         await self._audit(
             "event.published", ev, actor, {"calendarEventId": ev.calendar_event_id, "auto": auto}
         )
-        await self.d.publisher.publish(
+        await self._emit(
             "event.published",
             {
                 "eventId": ev.id,
@@ -713,6 +761,33 @@ class EventExtractionService:
         )
 
     async def _audit(
+        self, action: str, ev: ExtractedEvent, actor: Actor | None, metadata: dict[str, Any]
+    ) -> None:
+        outbox = _OUTBOX.get()
+        if outbox is not None:
+            outbox.append(("audit", (action, ev.model_copy(deep=True), actor, metadata), {}))
+            return
+        await self._audit_now(action, ev, actor, metadata)
+
+    async def _emit(
+        self, event_type: str, data: dict[str, Any], institution_id: str | None
+    ) -> None:
+        """Publish a domain event, deferred until the surrounding DB transaction committed."""
+        outbox = _OUTBOX.get()
+        if outbox is not None:
+            outbox.append(("event", (event_type, data, institution_id), {}))
+            return
+        await self._emit_now(event_type, data, institution_id)
+
+    async def _emit_now(
+        self, event_type: str, data: dict[str, Any], institution_id: str | None
+    ) -> None:
+        try:
+            await self.d.publisher.publish(event_type, data, institution_id)
+        except Exception:  # the extraction is committed; delivery problems are logged
+            log.exception("could not publish %s", event_type)
+
+    async def _audit_now(
         self, action: str, ev: ExtractedEvent, actor: Actor | None, metadata: dict[str, Any]
     ) -> None:
         try:

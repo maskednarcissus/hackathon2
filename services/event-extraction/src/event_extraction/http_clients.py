@@ -15,6 +15,27 @@ from .ports import NotFoundError, TranscriptData, UpstreamError
 
 log = logging.getLogger("event_extraction.http")
 
+INTERNAL_TOKEN_HEADER = "x-internal-token"
+
+
+def internal_headers(token: str | None) -> dict[str, str]:
+    return {INTERNAL_TOKEN_HEADER: token} if token else {}
+
+
+def make_envelope(
+    event_type: str, data: dict[str, Any], institution_id: str | None
+) -> dict[str, Any]:
+    """Phase 1 contract §6 envelope."""
+    return {
+        "eventId": str(uuid.uuid4()),
+        "type": event_type,
+        "version": 1,
+        "occurredAt": datetime.now(UTC).isoformat(),
+        "source": "event-extraction",
+        "institutionId": institution_id,
+        "data": data,
+    }
+
 
 async def _request(
     client: httpx.AsyncClient, method: str, url: str, **kwargs: Any
@@ -36,8 +57,14 @@ class HttpGatewayClient:
         base_url: str,
         timeout: float = 120.0,
         transport: httpx.AsyncBaseTransport | None = None,
+        internal_token: str | None = None,
     ) -> None:
-        self._client = httpx.AsyncClient(base_url=base_url, timeout=timeout, transport=transport)
+        self._client = httpx.AsyncClient(
+            base_url=base_url,
+            timeout=timeout,
+            transport=transport,
+            headers=internal_headers(internal_token),
+        )
 
     async def generate(self, request: dict[str, Any]) -> dict[str, Any]:
         response = await _request(self._client, "POST", "/v1/generate", json=request)
@@ -51,8 +78,14 @@ class HttpCalendarClient:
         base_url: str,
         timeout: float = 10.0,
         transport: httpx.AsyncBaseTransport | None = None,
+        internal_token: str | None = None,
     ) -> None:
-        self._client = httpx.AsyncClient(base_url=base_url, timeout=timeout, transport=transport)
+        self._client = httpx.AsyncClient(
+            base_url=base_url,
+            timeout=timeout,
+            transport=transport,
+            headers=internal_headers(internal_token),
+        )
 
     async def check_conflicts(self, payload: dict[str, Any]) -> list[Conflict]:
         response = await _request(self._client, "POST", "/v1/conflicts/check", json=payload)
@@ -102,8 +135,14 @@ class HttpAcademicClient:
         timeout: float = 10.0,
         horizon_days: int = 120,
         transport: httpx.AsyncBaseTransport | None = None,
+        internal_token: str | None = None,
     ) -> None:
-        self._client = httpx.AsyncClient(base_url=base_url, timeout=timeout, transport=transport)
+        self._client = httpx.AsyncClient(
+            base_url=base_url,
+            timeout=timeout,
+            transport=transport,
+            headers=internal_headers(internal_token),
+        )
         self._horizon = horizon_days
 
     async def get_class_context(self, scheduled_class_id: str) -> ClassContext:
@@ -163,8 +202,14 @@ class HttpTranscriptClient:
         base_url: str,
         timeout: float = 15.0,
         transport: httpx.AsyncBaseTransport | None = None,
+        internal_token: str | None = None,
     ) -> None:
-        self._client = httpx.AsyncClient(base_url=base_url, timeout=timeout, transport=transport)
+        self._client = httpx.AsyncClient(
+            base_url=base_url,
+            timeout=timeout,
+            transport=transport,
+            headers=internal_headers(internal_token),
+        )
 
     async def get_transcript(self, transcript_id: str) -> TranscriptData:
         response = await _request(self._client, "GET", f"/v1/transcripts/{transcript_id}")
@@ -200,8 +245,14 @@ class HttpAuditClient:
         base_url: str,
         timeout: float = 5.0,
         transport: httpx.AsyncBaseTransport | None = None,
+        internal_token: str | None = None,
     ) -> None:
-        self._client = httpx.AsyncClient(base_url=base_url, timeout=timeout, transport=transport)
+        self._client = httpx.AsyncClient(
+            base_url=base_url,
+            timeout=timeout,
+            transport=transport,
+            headers=internal_headers(internal_token),
+        )
 
     async def record(
         self,
@@ -239,6 +290,46 @@ class LoggingEventPublisher:
         log.info("event %s %s", event_type, data)
 
 
+class HttpEventBusPublisher:
+    """Integration stage §2: ``POST {EVENT_BUS_URL}/v1/topics/{type}:publish``."""
+
+    def __init__(
+        self,
+        base_url: str,
+        internal_token: str | None = None,
+        *,
+        attempts: int = 3,
+        backoff_seconds: float = 0.2,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self._client = httpx.AsyncClient(
+            base_url=base_url.rstrip("/"),
+            timeout=10.0,
+            transport=transport,
+            headers=internal_headers(internal_token),
+        )
+        self._attempts = attempts
+        self._backoff = backoff_seconds
+
+    async def publish(
+        self, event_type: str, data: dict[str, Any], institution_id: str | None
+    ) -> None:
+        import asyncio
+
+        envelope = make_envelope(event_type, data, institution_id)
+        last: Exception | None = None
+        for attempt in range(self._attempts):
+            try:
+                await _request(
+                    self._client, "POST", f"/v1/topics/{event_type}:publish", json=envelope
+                )
+                return
+            except (UpstreamError, NotFoundError) as exc:
+                last = exc
+                await asyncio.sleep(self._backoff * (2**attempt))
+        raise UpstreamError(f"event bus publish {event_type} failed: {last}")
+
+
 class PubSubEventPublisher:
     """Publishes the §6 envelope to a Pub/Sub topic named after the event type."""
 
@@ -253,14 +344,6 @@ class PubSubEventPublisher:
     ) -> None:
         import json
 
-        envelope = {
-            "eventId": str(uuid.uuid4()),
-            "type": event_type,
-            "version": 1,
-            "occurredAt": datetime.now(UTC).isoformat(),
-            "source": "event-extraction",
-            "institutionId": institution_id,
-            "data": data,
-        }
+        envelope = make_envelope(event_type, data, institution_id)
         topic = self._publisher.topic_path(self._project, event_type)
         self._publisher.publish(topic, json.dumps(envelope).encode())
