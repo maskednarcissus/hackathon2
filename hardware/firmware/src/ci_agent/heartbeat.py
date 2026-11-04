@@ -54,15 +54,15 @@ def build_heartbeat(
     uptime_path: Path = PROC_UPTIME,
 ) -> dict[str, Any]:
     usage = shutil.disk_usage(data_dir)
-    return {
+    payload: dict[str, Any] = {
         "sentAt": to_iso(now),
         "firmwareVersion": ctx.firmware_version,
         "uptimeSeconds": read_uptime_seconds(uptime_path),
         "diskFreeBytes": usage.free,
         "diskTotalBytes": usage.total,
-        "cpuTemperatureC": read_cpu_temperature_c(thermal_root),
-        "queuedRecordings": spool.queued_recordings,
-        "queuedBytes": spool.queued_bytes,
+        "cpuTempC": read_cpu_temperature_c(thermal_root),
+        "bufferQueueCount": spool.queued_recordings,
+        "bufferQueueBytes": spool.queued_bytes,
         "spoolBytes": spool.total_bytes,
         "evictedRecordings": spool.evicted_recordings,
         "isRecording": ctx.is_recording,
@@ -71,3 +71,5 @@ def build_heartbeat(
         "clockSkewMs": ctx.clock_skew_ms,
         "lastError": ctx.last_error,
     }
+    # device-management treats absent fields as unknown; it rejects explicit nulls.
+    return {key: value for key, value in payload.items() if value is not None}

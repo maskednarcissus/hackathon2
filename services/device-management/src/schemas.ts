@@ -36,8 +36,8 @@ const isoDateTime = z.string().datetime({ offset: true });
 
 export const HeartbeatBody = z.object({
   firmwareVersion: z.string().trim().min(1).max(50),
-  uptimeSeconds: z.number().int().nonnegative(),
-  cpuTempC: z.number().min(-40).max(150),
+  uptimeSeconds: z.number().int().nonnegative().optional(),
+  cpuTempC: z.number().min(-40).max(150).optional(),
   diskFreeBytes: z.number().int().nonnegative(),
   diskTotalBytes: z.number().int().positive(),
   bufferQueueCount: z.number().int().nonnegative(),
@@ -47,6 +47,9 @@ export const HeartbeatBody = z.object({
   isRecording: z.boolean(),
   currentScheduledClassId: z.string().uuid().optional(),
   lastUploadAt: isoDateTime.optional(),
+  evictedRecordings: z.number().int().nonnegative().optional(),
+  clockSkewMs: z.number().int().optional(),
+  lastError: z.string().max(1000).optional(),
 });
 
 export const FleetQuery = z.object({

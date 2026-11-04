@@ -25,6 +25,8 @@ export const statusMeta = (status: string): StatusMeta =>
 const ISSUES: Record<string, string> = {
   offline: 'Sem heartbeat recente',
   heartbeat_missed: 'Sem heartbeat recente',
+  no_heartbeat: 'Nunca enviou heartbeat',
+  certificate_revoked: 'Certificado revogado',
   low_storage: 'Armazenamento baixo',
   low_disk: 'Armazenamento baixo',
   high_temperature: 'Temperatura alta',

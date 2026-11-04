@@ -68,8 +68,8 @@ export interface DeviceAssignment {
 
 export interface HeartbeatMetrics {
   firmwareVersion: string;
-  uptimeSeconds: number;
-  cpuTempC: number;
+  uptimeSeconds?: number;
+  cpuTempC?: number;
   diskFreeBytes: number;
   diskTotalBytes: number;
   bufferQueueCount: number;
@@ -79,6 +79,9 @@ export interface HeartbeatMetrics {
   isRecording: boolean;
   currentScheduledClassId?: string;
   lastUploadAt?: string;
+  evictedRecordings?: number;
+  clockSkewMs?: number;
+  lastError?: string;
 }
 
 export interface Heartbeat extends HeartbeatMetrics {
@@ -96,4 +99,6 @@ export type HealthIssue =
   | 'upload_backlog'
   | 'unassigned'
   | 'certificate_expiring'
-  | 'certificate_revoked';
+  | 'certificate_revoked'
+  | 'clock_skew'
+  | 'recordings_evicted';

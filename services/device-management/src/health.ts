@@ -6,6 +6,7 @@ export const HEALTH_THRESHOLDS = {
   highTemperatureC: 80,
   uploadBacklogCount: 20,
   certificateExpiringDays: 30,
+  maxClockSkewMs: 5000,
 } as const;
 
 export interface DerivedHealth {
@@ -42,7 +43,10 @@ export function deriveHealth(
       offline = true;
     }
     if (latest.diskFreeBytes < HEALTH_THRESHOLDS.lowDiskBytes) issues.push('low_disk');
-    if (latest.cpuTempC > HEALTH_THRESHOLDS.highTemperatureC) issues.push('high_temperature');
+    if (latest.cpuTempC !== undefined && latest.cpuTempC > HEALTH_THRESHOLDS.highTemperatureC)
+      issues.push('high_temperature');
+    if (Math.abs(latest.clockSkewMs ?? 0) > HEALTH_THRESHOLDS.maxClockSkewMs) issues.push('clock_skew');
+    if ((latest.evictedRecordings ?? 0) > 0) issues.push('recordings_evicted');
     if (latest.bufferQueueCount > HEALTH_THRESHOLDS.uploadBacklogCount)
       issues.push('upload_backlog');
   }
@@ -54,6 +58,7 @@ export function deriveHealth(
     'low_disk',
     'high_temperature',
     'upload_backlog',
+    'recordings_evicted',
   ];
   if (issues.some((i) => attention.includes(i))) return { status: 'attention_required', issues };
   if (latest?.isRecording) return { status: 'recording', issues };

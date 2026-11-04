@@ -68,20 +68,20 @@ The path is the raw, percent-encoded request target exactly as sent on the wire.
   "uptimeSeconds": 86400,
   "diskFreeBytes": 21474836480,
   "diskTotalBytes": 32000000000,
-  "cpuTemperatureC": 52.3,
-  "queuedRecordings": 1,
-  "queuedBytes": 172800044,
+  "cpuTempC": 52.3,
+  "bufferQueueCount": 1,
+  "bufferQueueBytes": 172800044,
   "spoolBytes": 172800044,
   "evictedRecordings": 0,
   "isRecording": true,
   "currentScheduledClassId": "…",
   "planFetchedAt": "2026-11-04T21:55:00.000Z",
-  "clockSkewMs": 0,
-  "lastError": null
+  "clockSkewMs": 0
 }
 ```
 
-`cpuTemperatureC` and `uptimeSeconds` may be `null` when the platform does not expose them.
+`cpuTempC`, `uptimeSeconds`, `currentScheduledClassId`, `planFetchedAt` and `lastError` are **omitted**
+(never sent as `null`) when unknown. Unknown extra fields (`spoolBytes`, `planFetchedAt`) are ignored by the server.
 The server treats a device with no heartbeat for 3 minutes as offline.
 
 ## 4. Recording plan
