@@ -1,15 +1,5 @@
-"""Classroom Intelligence — Lecture Intelligence Service."""
+"""Classroom Intelligence — Lecture Intelligence Service (uvicorn entry point: ``main:app``)."""
 
-from fastapi import FastAPI
+from lecture_intelligence.app import create_app
 
-app = FastAPI(
-    title="CI Lecture Intelligence Service",
-    description="Generates structured lecture summaries, topic outlines, key definitions and Q&A pairs from transcripts using LLMs. Produces student-facing academic content.",
-    version="0.1.0",
-)
-
-
-@app.get("/health")
-async def health() -> dict[str, str]:
-    """Service health check."""
-    return {"status": "ok", "service": "lecture-intelligence"}
+app = create_app()
