@@ -27,3 +27,13 @@ self_test_min_mic_dbfs = -60          # quieter than this = microphone check fai
 log_file = ""                         # e.g. "/var/lib/ci-agent/logs/agent.log" (rotating)
 log_max_bytes = 10485760
 log_backup_count = 5
+# Second-generation hardware (phase 6)
+keystore = "file"                     # "pkcs11" on a2 (SE050)
+pkcs11_module = ""                    # e.g. "/usr/lib/aarch64-linux-gnu/libsss_pkcs11.so"
+pkcs11_token_label = "ci-se050"
+pkcs11_key_label = "ci-device-identity"
+mic_positions = ""                    # a2: "0,0;0.05,0;0.10,0;0.15,0" (metres)
+beam_azimuth_deg = 0
+ota_public_keys = ""                  # JSON {"release-2026": "-----BEGIN PUBLIC KEY-----…"} or file path
+ota_check_interval_s = 21600
+ota_install_command = ""              # e.g. "rauc install {path}"

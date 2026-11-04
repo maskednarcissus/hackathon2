@@ -12,6 +12,7 @@ import type {
   Heartbeat,
   ProvisioningToken,
 } from './domain.js';
+import type { FirmwareRelease, FirmwareUpdateReport } from './firmware.js';
 import { RepositoryConflictError, type DeviceRepository } from './repository.js';
 
 type Row = Record<string, unknown>;
@@ -55,6 +56,9 @@ function toDevice(r: Row): Device {
     maintenanceMode: Boolean(r['maintenance_mode']),
     status: r['status'] as Device['status'],
     lastSeenAt: isoOpt(r['last_seen_at']),
+    attestation: (r['attestation'] ?? undefined) as Device['attestation'],
+    reportedCapabilities: (r['reported_capabilities'] ??
+      undefined) as Device['reportedCapabilities'],
     createdAt: iso(r['created_at']),
     updatedAt: iso(r['updated_at']),
   }) as Device;
@@ -131,6 +135,21 @@ function toCommand(r: Row): DeviceCommand {
   }) as DeviceCommand;
 }
 
+function toRelease(r: Row): FirmwareRelease {
+  return {
+    id: String(r['id']),
+    model: String(r['model']),
+    version: String(r['version']),
+    manifest: String(r['manifest']),
+    manifestPayload: r['manifest_payload'] as FirmwareRelease['manifestPayload'],
+    rolloutPercent: Number(r['rollout_percent']),
+    halted: Boolean(r['halted']),
+    createdBy: (r['created_by'] as string | null) ?? null,
+    createdAt: iso(r['created_at']),
+    updatedAt: iso(r['updated_at']),
+  };
+}
+
 const isUniqueViolation = (err: unknown): err is pg.DatabaseError =>
   err instanceof pg.DatabaseError && err.code === '23505';
 
@@ -163,8 +182,9 @@ export class PgDeviceRepository implements DeviceRepository {
          id, classroom_id, serial_number, model, firmware_version, status, last_seen_at,
          institution_id, public_key_pem, public_key_fingerprint, certificate,
          certificate_issued_at, certificate_expires_at, credential_status, revoked_at,
-         revocation_reason, maintenance_mode, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+         revocation_reason, maintenance_mode, created_at, updated_at, attestation,
+         reported_capabilities)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20::jsonb,$21::jsonb)
        ON CONFLICT (id) DO UPDATE SET
          classroom_id = EXCLUDED.classroom_id, serial_number = EXCLUDED.serial_number,
          model = EXCLUDED.model, firmware_version = EXCLUDED.firmware_version,
@@ -175,7 +195,8 @@ export class PgDeviceRepository implements DeviceRepository {
          certificate_expires_at = EXCLUDED.certificate_expires_at,
          credential_status = EXCLUDED.credential_status, revoked_at = EXCLUDED.revoked_at,
          revocation_reason = EXCLUDED.revocation_reason,
-         maintenance_mode = EXCLUDED.maintenance_mode, updated_at = EXCLUDED.updated_at`,
+         maintenance_mode = EXCLUDED.maintenance_mode, updated_at = EXCLUDED.updated_at,
+         attestation = EXCLUDED.attestation, reported_capabilities = EXCLUDED.reported_capabilities`,
       [
         d.id,
         d.classroomId ?? null,
@@ -196,6 +217,8 @@ export class PgDeviceRepository implements DeviceRepository {
         d.maintenanceMode,
         d.createdAt,
         d.updatedAt,
+        d.attestation ? JSON.stringify(d.attestation) : null,
+        d.reportedCapabilities ? JSON.stringify(d.reportedCapabilities) : null,
       ],
     );
   }
@@ -468,6 +491,87 @@ export class PgDeviceRepository implements DeviceRepository {
     if (!rows[0] && attempt < 3) return this.createCommand(c, attempt + 1);
     if (!rows[0]) throw new RepositoryConflictError('uq_device_commands_open_type', 'retry later');
     return { command: toCommand(rows[0]), created: false };
+  }
+
+  // ------------------------------------------------------------------ firmware (Phase 6)
+  async saveRelease(r: FirmwareRelease): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO firmware_releases (id, model, version, manifest, manifest_payload, key_id,
+         rollout_percent, halted, created_by, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11)
+       ON CONFLICT (id) DO UPDATE SET rollout_percent = EXCLUDED.rollout_percent,
+         halted = EXCLUDED.halted, updated_at = EXCLUDED.updated_at`,
+      [
+        r.id,
+        r.model,
+        r.version,
+        r.manifest,
+        JSON.stringify(r.manifestPayload),
+        r.manifestPayload.keyId,
+        r.rolloutPercent,
+        r.halted,
+        actorToDb(r.createdBy ?? undefined),
+        r.createdAt,
+        r.updatedAt,
+      ],
+    );
+  }
+
+  async getRelease(id: string): Promise<FirmwareRelease | undefined> {
+    const { rows } = await this.pool.query<Row>('SELECT * FROM firmware_releases WHERE id = $1', [
+      id,
+    ]);
+    return rows[0] ? toRelease(rows[0]) : undefined;
+  }
+
+  async findRelease(model: string, version: string): Promise<FirmwareRelease | undefined> {
+    const { rows } = await this.pool.query<Row>(
+      'SELECT * FROM firmware_releases WHERE model = $1 AND version = $2',
+      [model, version],
+    );
+    return rows[0] ? toRelease(rows[0]) : undefined;
+  }
+
+  async listReleases(model?: string): Promise<FirmwareRelease[]> {
+    const { rows } = await this.pool.query<Row>(
+      `SELECT * FROM firmware_releases WHERE ($1::text IS NULL OR model = $1)
+        ORDER BY created_at DESC`,
+      [model ?? null],
+    );
+    return rows.map(toRelease);
+  }
+
+  async saveUpdateReport(r: FirmwareUpdateReport): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO device_firmware_update_reports (id, device_id, release_id, state, error, reported_at)
+       VALUES ($1,$2,$3,$4,$5,$6)
+       ON CONFLICT (device_id, release_id) DO UPDATE SET state = EXCLUDED.state,
+         error = EXCLUDED.error, reported_at = EXCLUDED.reported_at`,
+      [r.id, r.deviceId, r.releaseId, r.state, r.error ?? null, r.reportedAt],
+    );
+  }
+
+  async listUpdateReports(filter: {
+    releaseId?: string;
+    deviceId?: string;
+  }): Promise<FirmwareUpdateReport[]> {
+    const { rows } = await this.pool.query<Row>(
+      `SELECT * FROM device_firmware_update_reports
+        WHERE ($1::uuid IS NULL OR release_id = $1) AND ($2::uuid IS NULL OR device_id = $2)
+        ORDER BY reported_at DESC`,
+      [filter.releaseId ?? null, filter.deviceId ?? null],
+    );
+    return rows.map(
+      (r) =>
+        defined({
+          id: String(r['id']),
+          deviceId: String(r['device_id']),
+          releaseId: String(r['release_id']),
+          state: r['state'] as FirmwareUpdateReport['state'],
+          error: strOpt(r['error']),
+          reportedAt: iso(r['reported_at']),
+        }) as FirmwareUpdateReport,
+    );
   }
 
   async getCommand(id: string): Promise<DeviceCommand | undefined> {

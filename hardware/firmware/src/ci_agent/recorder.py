@@ -167,12 +167,28 @@ class Recorder:
         """Running hash of captured PCM (integrity of the in-progress capture)."""
         return self._digest.hexdigest()
 
-    def start(self, classroom_id: str, scheduled_class_id: str | None) -> SpoolEntry:
+    def start(
+        self,
+        classroom_id: str,
+        scheduled_class_id: str | None,
+        *,
+        class_starts_at: datetime | None = None,
+        class_ends_at: datetime | None = None,
+    ) -> SpoolEntry:
         if self._entry is not None:
             raise RuntimeError("recorder already active")
         source = self.source_factory()
         source.open()
-        entry = self.spool.begin(classroom_id, scheduled_class_id, self.clock())
+        # The spool records what the source really delivers (gen2: N interleaved channels).
+        self.spool.sample_rate = source.sample_rate
+        self.spool.channels = source.channels
+        entry = self.spool.begin(
+            classroom_id,
+            scheduled_class_id,
+            self.clock(),
+            class_starts_at=class_starts_at,
+            class_ends_at=class_ends_at,
+        )
         self._entry = entry
         self._source = source
         self._digest = hashlib.sha256()

@@ -9,7 +9,9 @@ import {
   PubSubRestPublisher,
   type EventPublisher,
 } from './clients.js';
+import { parseRoots } from './attestation.js';
 import { loadDeviceCa } from './crypto.js';
+import { loadReleaseSigner, parseTrustedKeys } from './firmware.js';
 import { InMemoryDeviceRepository, type DeviceRepository } from './repository.js';
 import { PgDeviceRepository, createPool } from './repository.pg.js';
 
@@ -50,7 +52,29 @@ if (env['EVENT_BUS_URL']) {
   events = new LoggingEventPublisher(log);
 }
 
+// Phase 6: vendor roots for hardware key attestation, trusted OTA release keys.
+const attestationRoots = parseRoots(env['DEVICE_ATTESTATION_ROOTS']);
+if (attestationRoots.length === 0)
+  log.warn('DEVICE_ATTESTATION_ROOTS not set: models that require attestation cannot register');
+const firmwareTrustedKeys = parseTrustedKeys(env['FIRMWARE_RELEASE_KEYS']);
+const releaseSigner = loadReleaseSigner(
+  env['FIRMWARE_SIGNING_PRIVATE_KEY_PEM'],
+  env['FIRMWARE_SIGNING_KEY_ID'],
+);
+if (releaseSigner) {
+  if (env['NODE_ENV'] === 'production') {
+    log.fatal(
+      'FIRMWARE_SIGNING_PRIVATE_KEY_PEM must not be set in production (sign releases offline)',
+    );
+    process.exit(1);
+  }
+  log.warn('server-side firmware manifest signing enabled (development only)');
+}
+
 const service = buildApp({
+  attestationRoots,
+  firmwareTrustedKeys,
+  ...(releaseSigner ? { releaseSigner } : {}),
   loggerInstance: log,
   ...(env['ADMIN_API_TOKEN'] ? { adminToken: env['ADMIN_API_TOKEN'] } : {}),
   ...(internalToken ? { internalToken } : {}),

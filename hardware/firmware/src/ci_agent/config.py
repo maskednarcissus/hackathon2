@@ -48,6 +48,17 @@ class AgentConfig:
     log_file: str = ""
     log_max_bytes: int = 10 * MIB
     log_backup_count: int = 5
+    # Phase 6 (gen2 hardware)
+    keystore: str = "file"  # file | pkcs11
+    pkcs11_module: str = ""  # e.g. /usr/lib/libse050_pkcs11.so
+    pkcs11_token_label: str = "ci-se050"
+    pkcs11_key_label: str = "ci-device-identity"
+    mic_positions: str = ""  # "x,y;x,y;…" metres, one per capture channel
+    beam_azimuth_deg: float = 0.0  # 0 = broadside (lectern in front of the array)
+    ota_public_keys: str = ""  # JSON {keyId: PEM} or path to such a file; empty = OTA off
+    ota_check_interval_s: float = 21600.0
+    ota_install_command: str = ""  # e.g. "rauc install {path}"; empty = stage only
+    ota_max_bytes: int = 2 * GIB
 
     @property
     def identity_dir(self) -> Path:
@@ -68,6 +79,15 @@ class AgentConfig:
     @property
     def plan_cache_path(self) -> Path:
         return self.data_dir / "plan-cache.json"
+
+    @property
+    def attestation_path(self) -> Path:
+        """Factory-provisioned key attestation (ci-attest-v1), present on a2 units."""
+        return self.identity_dir / "attestation.json"
+
+    @property
+    def ota_dir(self) -> Path:
+        return self.data_dir / "ota"
 
     @property
     def command_state_path(self) -> Path:

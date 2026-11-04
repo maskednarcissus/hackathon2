@@ -5,11 +5,10 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Callable, Generator
 from datetime import datetime
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 import httpx
 
-from ci_agent.identity import DeviceIdentity
 from ci_agent.timeutil import to_iso, utcnow
 
 JsonDict = dict[str, Any]
@@ -29,6 +28,18 @@ class ApiError(Exception):
         return self.status_code == 429 or self.status_code >= 500
 
 
+class RequestSigner(Protocol):
+    """``DeviceIdentity`` or any ``Keystore`` (file / PKCS#11)."""
+
+    def signed_headers(
+        self, device_id: str, method: str, path_with_query: str, body: bytes, now: datetime
+    ) -> dict[str, str]: ...
+
+
+class RegistrationKey(Protocol):
+    def public_key_pem(self) -> str: ...
+
+
 class DeviceAuth(httpx.Auth):
     """Adds ``X-Device-*`` signature headers to every request."""
 
@@ -36,7 +47,7 @@ class DeviceAuth(httpx.Auth):
 
     def __init__(
         self,
-        identity: DeviceIdentity,
+        identity: RequestSigner,
         device_id: str,
         clock: Callable[[], datetime] = utcnow,
     ) -> None:
@@ -70,11 +81,15 @@ def register_device(
     serial_number: str,
     model: str,
     firmware_version: str,
-    identity: DeviceIdentity,
+    identity: RegistrationKey,
     transport: httpx.BaseTransport | None = None,
     timeout: float = 30.0,
+    attestation: JsonDict | None = None,
 ) -> JsonDict:
-    """``POST /v1/devices/register`` — unsigned (the device has no id yet)."""
+    """``POST /v1/devices/register`` — unsigned (the device has no id yet).
+
+    Secure-element models (a2) add the factory key attestation (``ci-attest-v1``).
+    """
     with httpx.Client(base_url=base_url, transport=transport, timeout=timeout) as client:
         return _json(
             client.post(
@@ -85,6 +100,7 @@ def register_device(
                     "model": model,
                     "firmwareVersion": firmware_version,
                     "publicKeyPem": identity.public_key_pem(),
+                    **({"attestation": attestation} if attestation else {}),
                 },
             )
         )
@@ -94,7 +110,7 @@ class DeviceManagementApi:
     def __init__(
         self,
         base_url: str,
-        identity: DeviceIdentity,
+        identity: RequestSigner,
         device_id: str,
         *,
         transport: httpx.BaseTransport | None = None,
@@ -128,6 +144,16 @@ class DeviceManagementApi:
         )
         return cast(JsonDict, response.json()), response.headers.get("date")
 
+    def firmware_update(self) -> JsonDict:
+        """``GET /v1/devices/{id}/firmware-update`` (Phase 6 OTA)."""
+        return _json(self._client.get(f"/v1/devices/{self.device_id}/firmware-update"))
+
+    def firmware_status(self, release_id: str, state: str, error: str | None = None) -> None:
+        body: JsonDict = {"releaseId": release_id, "state": state}
+        if error:
+            body["error"] = error[:2000]
+        _check(self._client.post(f"/v1/devices/{self.device_id}/firmware-update/status", json=body))
+
     def command_result(self, command_id: str, payload: JsonDict) -> None:
         """``POST /v1/devices/{id}/commands/{commandId}/result`` (phase-4 §3).
 
@@ -152,7 +178,7 @@ class IngestionApi:
     def __init__(
         self,
         base_url: str,
-        identity: DeviceIdentity,
+        identity: RequestSigner,
         device_id: str,
         *,
         transport: httpx.BaseTransport | None = None,

@@ -24,6 +24,13 @@ export const RegisterDevice = z.object({
   model: z.string().trim().min(1).max(100),
   firmwareVersion: z.string().trim().min(1).max(50),
   publicKeyPem: z.string().min(40).max(4096),
+  /** Hardware key attestation (`ci-attest-v1`), required for models with a secure element. */
+  attestation: z
+    .object({
+      chain: z.array(z.string().min(10).max(8192)).min(1).max(4),
+      statement: z.string().min(10).max(8192),
+    })
+    .optional(),
 });
 
 export const AssignDevice = z.object({ classroomId: z.string().uuid() });
@@ -50,6 +57,8 @@ export const HeartbeatBody = z.object({
   evictedRecordings: z.number().int().nonnegative().optional(),
   clockSkewMs: z.number().int().optional(),
   lastError: z.string().max(1000).optional(),
+  /** Capabilities detected by the firmware (Phase 6), stored as reported. */
+  capabilities: z.record(z.unknown()).optional(),
 });
 
 export const FleetQuery = z.object({
@@ -133,3 +142,37 @@ export const CommandListQuery = z.object({
 });
 
 export const CommandCancel = z.object({ actorId: z.string().uuid().optional() });
+
+const semver = z
+  .string()
+  .trim()
+  .regex(/^\d+\.\d+\.\d+([-+][0-9A-Za-z.-]+)?$/, 'Expected semantic version');
+
+export const ReleaseCreate = z.union([
+  z.object({ manifest: z.string().min(20).max(16_384) }),
+  z.object({
+    model: z.string().min(1).max(100),
+    version: semver,
+    url: z.string().url().max(2048),
+    sha256: z.string().regex(/^[0-9a-f]{64}$/),
+    sizeBytes: z
+      .number()
+      .int()
+      .positive()
+      .max(2 * 1024 ** 3),
+    minVersion: semver.optional(),
+  }),
+]);
+
+export const RolloutUpdate = z.object({
+  percent: z.number().int().min(0).max(100),
+  halted: z.boolean().optional(),
+});
+
+export const ReleaseQuery = z.object({ model: z.string().min(1).max(100).optional() });
+
+export const FirmwareStatusBody = z.object({
+  releaseId: z.string().uuid(),
+  state: z.enum(['downloading', 'staged', 'installed', 'failed']),
+  error: z.string().max(2000).optional(),
+});

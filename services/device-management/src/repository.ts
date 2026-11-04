@@ -6,6 +6,7 @@ import type {
   Heartbeat,
   ProvisioningToken,
 } from './domain.js';
+import type { FirmwareRelease, FirmwareUpdateReport } from './firmware.js';
 
 export interface DeviceRepository {
   saveDevice(device: Device): Promise<void>;
@@ -45,6 +46,18 @@ export interface DeviceRepository {
   /** Inserts unless an open (pending/delivered) command of the same type exists for the device. */
   createCommand(command: DeviceCommand): Promise<{ command: DeviceCommand; created: boolean }>;
   getCommand(id: string): Promise<DeviceCommand | undefined>;
+  saveRelease(release: FirmwareRelease): Promise<void>;
+  getRelease(id: string): Promise<FirmwareRelease | undefined>;
+  findRelease(model: string, version: string): Promise<FirmwareRelease | undefined>;
+  /** Newest first. */
+  listReleases(model?: string): Promise<FirmwareRelease[]>;
+  /** One report per (device, release); a newer report replaces the previous state. */
+  saveUpdateReport(report: FirmwareUpdateReport): Promise<void>;
+  listUpdateReports(filter: {
+    releaseId?: string;
+    deviceId?: string;
+  }): Promise<FirmwareUpdateReport[]>;
+
   /** Newest first. */
   listCommands(
     filter: { deviceId?: string; statuses?: readonly CommandStatus[] },
@@ -71,6 +84,48 @@ export class InMemoryDeviceRepository implements DeviceRepository {
   private readonly assignments = new Map<string, DeviceAssignment>();
   private readonly heartbeats = new Map<string, Heartbeat[]>();
   private readonly commands = new Map<string, DeviceCommand>();
+  private readonly releases = new Map<string, FirmwareRelease>();
+  private readonly reports = new Map<string, FirmwareUpdateReport>();
+
+  saveRelease(release: FirmwareRelease): Promise<void> {
+    this.releases.set(release.id, clone(release));
+    return Promise.resolve();
+  }
+  getRelease(id: string): Promise<FirmwareRelease | undefined> {
+    const r = this.releases.get(id);
+    return Promise.resolve(r ? clone(r) : undefined);
+  }
+  findRelease(model: string, version: string): Promise<FirmwareRelease | undefined> {
+    const r = [...this.releases.values()].find((x) => x.model === model && x.version === version);
+    return Promise.resolve(r ? clone(r) : undefined);
+  }
+  listReleases(model?: string): Promise<FirmwareRelease[]> {
+    return Promise.resolve(
+      [...this.releases.values()]
+        .filter((r) => !model || r.model === model)
+        .reverse()
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .map(clone),
+    );
+  }
+  saveUpdateReport(report: FirmwareUpdateReport): Promise<void> {
+    this.reports.set(`${report.deviceId}:${report.releaseId}`, clone(report));
+    return Promise.resolve();
+  }
+  listUpdateReports(filter: {
+    releaseId?: string;
+    deviceId?: string;
+  }): Promise<FirmwareUpdateReport[]> {
+    return Promise.resolve(
+      [...this.reports.values()]
+        .filter(
+          (r) =>
+            (!filter.releaseId || r.releaseId === filter.releaseId) &&
+            (!filter.deviceId || r.deviceId === filter.deviceId),
+        )
+        .map(clone),
+    );
+  }
 
   saveDevice(device: Device): Promise<void> {
     this.devices.set(device.id, clone(device));

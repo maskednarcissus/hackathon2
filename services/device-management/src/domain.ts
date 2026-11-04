@@ -1,3 +1,5 @@
+import type { VerifiedAttestation } from './attestation.js';
+
 export type DeviceStatus =
   | 'online'
   | 'offline'
@@ -39,6 +41,10 @@ export interface Device {
   /** Last derived operational status, persisted to detect transitions. */
   status: DeviceStatus;
   lastSeenAt?: string;
+  /** Hardware key attestation verified at registration (Phase 6, a2+). */
+  attestation?: VerifiedAttestation;
+  /** Capabilities the firmware detected and reported in its last heartbeat. */
+  reportedCapabilities?: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
 }

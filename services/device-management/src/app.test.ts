@@ -62,7 +62,7 @@ describe('1.1 provisioning & registration', () => {
         payload: {
           provisioningToken: token,
           serialNumber: 'CI-A1-000777',
-          model: 'm',
+          model: 'ci-capture-a1',
           firmwareVersion: '1',
           publicKeyPem,
         },
@@ -85,7 +85,7 @@ describe('1.1 provisioning & registration', () => {
         payload: {
           provisioningToken,
           serialNumber,
-          model: 'm',
+          model: 'ci-capture-a1',
           firmwareVersion: '1',
           publicKeyPem: newKeyPair().publicKeyPem,
         },
@@ -117,7 +117,7 @@ describe('1.1 provisioning & registration', () => {
       payload: {
         provisioningToken: token,
         serialNumber: 'CI-A1-000444',
-        model: 'm',
+        model: 'ci-capture-a1',
         firmwareVersion: '1',
         publicKeyPem: rsa,
       },

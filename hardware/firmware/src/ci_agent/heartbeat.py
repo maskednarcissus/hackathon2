@@ -43,6 +43,7 @@ class HeartbeatContext:
     plan_fetched_at: datetime | None
     clock_skew_ms: int
     last_error: str | None
+    capabilities: dict[str, Any] | None = None
 
 
 def build_heartbeat(
@@ -70,6 +71,7 @@ def build_heartbeat(
         "planFetchedAt": to_iso(ctx.plan_fetched_at) if ctx.plan_fetched_at else None,
         "clockSkewMs": ctx.clock_skew_ms,
         "lastError": ctx.last_error,
+        "capabilities": ctx.capabilities,
     }
     # device-management treats absent fields as unknown; it rejects explicit nulls.
     return {key: value for key, value in payload.items() if value is not None}

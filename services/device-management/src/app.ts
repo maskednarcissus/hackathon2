@@ -1,4 +1,5 @@
-import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { createPublicKey, randomUUID, timingSafeEqual, type KeyObject } from 'node:crypto';
+import { z } from 'zod';
 import Fastify, {
   type FastifyBaseLogger,
   type FastifyInstance,
@@ -68,6 +69,7 @@ import {
   CommandResult,
   DiagnosticsQuery,
   FirmwareQuery,
+  FirmwareStatusBody,
   FleetConsoleQuery,
   FleetQuery,
   HealthQuery,
@@ -77,8 +79,29 @@ import {
   PlanQuery,
   ProvisioningTokenCreate,
   RegisterDevice,
+  ReleaseCreate,
+  ReleaseQuery,
+  RolloutUpdate,
   RevokeDevice,
 } from './schemas.js';
+import {
+  AttestationError,
+  verifyAttestation,
+  type AttestationRoot,
+  type VerifiedAttestation,
+} from './attestation.js';
+import {
+  ManifestError,
+  rolloutBucket,
+  selectRelease,
+  signManifest,
+  verifyManifest,
+  type FirmwareManifest,
+  type FirmwareRelease,
+  type FirmwareUpdateReport,
+  type ReleaseSigner,
+} from './firmware.js';
+import { DEVICE_MODELS, findDeviceModel } from './models.js';
 import { createInternalGuard } from './internal-auth.js';
 import { createDeviceAuthHook } from './signature.js';
 
@@ -104,6 +127,12 @@ export interface BuildAppOptions {
   /** When set, `/internal/*` routes (incl. the status sweep) require `x-internal-token`. */
   internalToken?: string;
   certificateValidityDays?: number;
+  /** Vendor roots trusted for hardware key attestation (`ci-attest-v1`). */
+  attestationRoots?: readonly AttestationRoot[];
+  /** Release public keys (`keyId` → Ed25519) trusted for OTA manifests. */
+  firmwareTrustedKeys?: ReadonlyMap<string, KeyObject>;
+  /** Development only: sign manifests server-side for unsigned release uploads. */
+  releaseSigner?: ReleaseSigner;
   heartbeatRetention?: number;
   /** Nominal firmware heartbeat interval, used for missed-heartbeat counts (default 60 s). */
   heartbeatIntervalSeconds?: number;
@@ -331,6 +360,42 @@ export function buildApp(options: BuildAppOptions): DeviceManagementApp {
     }
     const fingerprint = publicKeyFingerprint(publicKey);
 
+    // Phase 6: the model must be known; secure-element models must prove the key is hardware-bound.
+    const deviceModel = findDeviceModel(body.model);
+    if (!deviceModel) {
+      throw new AppError(422, 'unknown_model', `Unknown device model ${body.model}`, {
+        knownModels: DEVICE_MODELS.map((m) => m.model),
+      });
+    }
+    let attestation: VerifiedAttestation | undefined;
+    if (deviceModel.requiresAttestation && !body.attestation) {
+      throw new AppError(
+        422,
+        'attestation_required',
+        `${body.model} must present a key attestation`,
+      );
+    }
+    if (body.attestation) {
+      try {
+        attestation = verifyAttestation(
+          body.attestation,
+          {
+            serialNumber: body.serialNumber,
+            model: body.model,
+            keyFingerprint: fingerprint,
+            keystore: deviceModel.capabilities.hardwareKeystore,
+          },
+          options.attestationRoots ?? [],
+          now,
+        );
+      } catch (err) {
+        if (err instanceof AttestationError) {
+          throw new AppError(422, 'attestation_invalid', err.message, { reason: err.reason });
+        }
+        throw err;
+      }
+    }
+
     const previous = await repo.findDeviceBySerial(body.serialNumber);
     if (previous && previous.credentialStatus === 'active') {
       throw conflict(
@@ -368,6 +433,7 @@ export function buildApp(options: BuildAppOptions): DeviceManagementApp {
       certificateExpiresAt: expiresAt,
       credentialStatus: 'active',
       maintenanceMode: false,
+      ...(attestation ? { attestation } : {}),
       status: 'offline',
       createdAt: previous?.createdAt ?? issuedAt,
       updatedAt: issuedAt,
@@ -636,13 +702,14 @@ export function buildApp(options: BuildAppOptions): DeviceManagementApp {
       deviceId: id,
       receivedAt,
       deviceTimestamp: String(request.headers['x-device-timestamp']),
-      ...stripUndefined(metrics),
+      ...stripUndefined(omit(metrics, ['capabilities'])),
     };
     await repo.addHeartbeat(heartbeat, heartbeatRetention);
     const updated: Device = {
       ...device,
       lastSeenAt: receivedAt,
       firmwareVersion: metrics.firmwareVersion,
+      ...(metrics.capabilities ? { reportedCapabilities: metrics.capabilities } : {}),
       updatedAt: receivedAt,
     };
     await repo.saveDevice(updated);
@@ -713,7 +780,14 @@ export function buildApp(options: BuildAppOptions): DeviceManagementApp {
     if (Date.parse(to) - Date.parse(from) > 14 * 86_400_000)
       throw new AppError(400, 'invalid_range', 'Range may not exceed 14 days');
     try {
-      return await deps.schedule.getRecordingPlan(device.classroomId, from, to);
+      const plan = await deps.schedule.getRecordingPlan(device.classroomId, from, to);
+      // Phase 6: what to capture/upload is a property of the hardware model.
+      const model = findDeviceModel(device.model);
+      return {
+        ...plan,
+        deviceModel: device.model,
+        ...(model ? { captureProfile: model.captureProfile } : {}),
+      };
     } catch (err) {
       throw upstream(err);
     }
@@ -1082,6 +1156,220 @@ export function buildApp(options: BuildAppOptions): DeviceManagementApp {
       lastCommands: (await repo.listCommands({ deviceId: id }, 10)).map(commandView),
     };
   });
+
+  // ------------------------------------------------------------------ 6.10 model registry & OTA
+  app.get('/v1/device-models', () => ({ items: DEVICE_MODELS }));
+  app.get('/v1/device-models/:model', (request) => {
+    const { model } = z.object({ model: z.string().min(1).max(100) }).parse(request.params);
+    const found = findDeviceModel(model);
+    if (!found) throw notFound('Device model', model);
+    return found;
+  });
+
+  const trustedKeys = new Map(options.firmwareTrustedKeys ?? []);
+  if (options.releaseSigner) {
+    trustedKeys.set(options.releaseSigner.keyId, createPublicKey(options.releaseSigner.privateKey));
+  }
+
+  const releaseView = (r: FirmwareRelease): Record<string, unknown> => ({
+    releaseId: r.id,
+    model: r.model,
+    version: r.version,
+    rolloutPercent: r.rolloutPercent,
+    halted: r.halted,
+    manifest: r.manifest,
+    manifestPayload: r.manifestPayload,
+    createdBy: r.createdBy,
+    createdAt: r.createdAt,
+    updatedAt: r.updatedAt,
+  });
+
+  app.post('/v1/firmware/releases', { preHandler: requireAdmin }, async (request, reply) => {
+    const body = ReleaseCreate.parse(request.body);
+    let compact: string;
+    if ('manifest' in body) {
+      compact = body.manifest; // signed offline by the release pipeline
+    } else {
+      if (!options.releaseSigner) {
+        throw new AppError(
+          422,
+          'signing_unavailable',
+          'Upload a manifest signed by a release key (server-side signing is disabled)',
+        );
+      }
+      compact = signManifest(
+        {
+          v: 1,
+          model: body.model,
+          version: body.version,
+          url: body.url,
+          sha256: body.sha256,
+          sizeBytes: body.sizeBytes,
+          ...(body.minVersion ? { minVersion: body.minVersion } : {}),
+          releasedAt: nowIso(),
+          keyId: options.releaseSigner.keyId,
+        },
+        options.releaseSigner.privateKey,
+      );
+    }
+    let manifest: FirmwareManifest;
+    try {
+      manifest = verifyManifest(compact, trustedKeys);
+    } catch (err) {
+      if (err instanceof ManifestError) {
+        throw new AppError(422, 'invalid_manifest', err.message, { reason: err.reason });
+      }
+      throw err;
+    }
+    if (!findDeviceModel(manifest.model)) throw new AppError(422, 'unknown_model', manifest.model);
+    if (await repo.findRelease(manifest.model, manifest.version)) {
+      throw conflict('release_exists', `${manifest.model} ${manifest.version} already exists`);
+    }
+    const ts = nowIso();
+    const release: FirmwareRelease = {
+      id: deps.idGenerator(),
+      model: manifest.model,
+      version: manifest.version,
+      manifest: compact,
+      manifestPayload: manifest,
+      rolloutPercent: 0,
+      halted: false,
+      createdBy: actorOf(request),
+      createdAt: ts,
+      updatedAt: ts,
+    };
+    await repo.saveRelease(release);
+    await audit({
+      tenantId: null,
+      actorId: actorOf(request),
+      actorType: 'admin',
+      action: 'firmware.release_created',
+      resourceType: 'firmware_release',
+      resourceId: release.id,
+      metadata: {
+        model: release.model,
+        version: release.version,
+        keyId: manifest.keyId,
+        sha256: manifest.sha256,
+      },
+    });
+    return reply.status(201).send(releaseView(release));
+  });
+
+  app.get('/v1/firmware/releases', { preHandler: requireAdmin }, async (request) => {
+    const { model } = ReleaseQuery.parse(request.query);
+    return { items: (await repo.listReleases(model)).map(releaseView) };
+  });
+
+  const releaseProgress = async (r: FirmwareRelease): Promise<Record<string, unknown>> => {
+    const devices = (await repo.listDevices()).filter(
+      (d) => d.model === r.model && d.credentialStatus === 'active',
+    );
+    const reports = await repo.listUpdateReports({ releaseId: r.id });
+    const byState: Record<string, number> = { downloading: 0, staged: 0, installed: 0, failed: 0 };
+    for (const rep of reports) byState[rep.state] = (byState[rep.state] ?? 0) + 1;
+    return {
+      ...releaseView(r),
+      progress: {
+        modelDevices: devices.length,
+        eligibleDevices: devices.filter((d) => rolloutBucket(d.id, r.id) < r.rolloutPercent).length,
+        runningVersion: devices.filter((d) => d.firmwareVersion === r.version).length,
+        reports: byState,
+      },
+    };
+  };
+
+  app.get('/v1/firmware/releases/:id', { preHandler: requireAdmin }, async (request) => {
+    const { id } = IdParams.parse(request.params);
+    const release = await repo.getRelease(id);
+    if (!release) throw notFound('Firmware release', id);
+    return releaseProgress(release);
+  });
+
+  app.put('/v1/firmware/releases/:id/rollout', { preHandler: requireAdmin }, async (request) => {
+    const { id } = IdParams.parse(request.params);
+    const body = RolloutUpdate.parse(request.body);
+    const release = await repo.getRelease(id);
+    if (!release) throw notFound('Firmware release', id);
+    const updated: FirmwareRelease = {
+      ...release,
+      rolloutPercent: body.percent,
+      halted: body.halted ?? release.halted,
+      updatedAt: nowIso(),
+    };
+    await repo.saveRelease(updated);
+    await audit({
+      tenantId: null,
+      actorId: actorOf(request),
+      actorType: 'admin',
+      action: 'firmware.rollout_changed',
+      resourceType: 'firmware_release',
+      resourceId: id,
+      metadata: {
+        model: release.model,
+        version: release.version,
+        from: { percent: release.rolloutPercent, halted: release.halted },
+        to: { percent: updated.rolloutPercent, halted: updated.halted },
+      },
+    });
+    return releaseProgress(updated);
+  });
+
+  app.get('/v1/devices/:id/firmware-update', { preHandler: deviceAuth }, async (request) => {
+    const { id } = IdParams.parse(request.params);
+    const device = await requireDevice(id);
+    const release = selectRelease(await repo.listReleases(device.model), device);
+    if (!release) {
+      return { updateAvailable: false, currentVersion: device.firmwareVersion };
+    }
+    return {
+      updateAvailable: true,
+      currentVersion: device.firmwareVersion,
+      releaseId: release.id,
+      version: release.version,
+      manifest: release.manifest,
+      url: release.manifestPayload.url,
+      sha256: release.manifestPayload.sha256,
+      sizeBytes: release.manifestPayload.sizeBytes,
+    };
+  });
+
+  app.post(
+    '/v1/devices/:id/firmware-update/status',
+    { preHandler: deviceAuth },
+    async (request) => {
+      const { id } = IdParams.parse(request.params);
+      const body = FirmwareStatusBody.parse(request.body);
+      const device = await requireDevice(id);
+      const release = await repo.getRelease(body.releaseId);
+      if (!release || release.model !== device.model)
+        throw notFound('Firmware release', body.releaseId);
+      const report: FirmwareUpdateReport = {
+        id: deps.idGenerator(),
+        deviceId: id,
+        releaseId: release.id,
+        state: body.state,
+        ...(body.error ? { error: body.error } : {}),
+        reportedAt: nowIso(),
+      };
+      await repo.saveUpdateReport(report);
+      await audit({
+        tenantId: device.institutionId,
+        actorId: id,
+        actorType: 'device',
+        action: 'firmware.update_reported',
+        resourceType: 'firmware_release',
+        resourceId: release.id,
+        metadata: {
+          deviceId: id,
+          version: release.version,
+          state: body.state,
+          error: body.error ?? null,
+        },
+      });
+      return { releaseId: release.id, state: report.state, reportedAt: report.reportedAt };
+    },
+  );
 
   // ------------------------------------------------------------------ status sweep
   async function sweepStatuses(): Promise<SweepResult> {

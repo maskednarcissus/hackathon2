@@ -111,3 +111,22 @@ conflict → `409 classroom_occupied`), command creation (`ON CONFLICT … DO NO
 `409 conflict` / `422 invalid_reference`.
 
 Postgres suite: `TEST_DATABASE_URL=postgresql://… pnpm test` (creates and drops `ci_test_<random>`).
+
+## Phase 6 — second-generation devices (6.10)
+
+| Method | Path                                                  | Auth   | Purpose                                                                                                                      |
+| ------ | ----------------------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/v1/device-models` · `/v1/device-models/:model`      | —      | capability registry (`src/models.ts`)                                                                                        |
+| POST   | `/v1/devices/register`                                | token  | `attestation: { chain, statement }` (`ci-attest-v1`) required for `requiresAttestation` models                               |
+| GET    | `/v1/devices/:id/recording-plan`                      | device | adds `deviceModel` and the model `captureProfile`                                                                            |
+| POST   | `/v1/firmware/releases`                               | admin  | `{ manifest }` signed offline (verified against `FIRMWARE_RELEASE_KEYS`), or unsigned fields when a dev signer is configured |
+| GET    | `/v1/firmware/releases` · `/v1/firmware/releases/:id` | admin  | releases; detail includes rollout progress (eligible devices, running version, reports by state)                             |
+| PUT    | `/v1/firmware/releases/:id/rollout`                   | admin  | `{ percent, halted? }`                                                                                                       |
+| GET    | `/v1/devices/:id/firmware-update`                     | device | eligible release + signed manifest                                                                                           |
+| POST   | `/v1/devices/:id/firmware-update/status`              | device | `{ releaseId, state, error? }`                                                                                               |
+
+Formats: `hardware/device-protocol/README.md` §8–§10. Configuration: `DEVICE_ATTESTATION_ROOTS`
+(JSON `[{id, publicKeyPem}]`, Ed25519 or P-256), `FIRMWARE_RELEASE_KEYS` (JSON `[{keyId, publicKeyPem}]`),
+`FIRMWARE_SIGNING_PRIVATE_KEY_PEM` + `FIRMWARE_SIGNING_KEY_ID` (development only; refused in production).
+Audit: `firmware.release_created`, `firmware.rollout_changed`, `firmware.update_reported`.
+Schema: `data/migrations/pending/device-management-phase6.sql`.

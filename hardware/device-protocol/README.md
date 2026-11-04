@@ -141,3 +141,105 @@ recording metadata (§6) carries authoritative times.
   Un-uploaded audio is deleted **only** above the hard limit (oldest first, never the live
   recording); each eviction is an incident logged on the device and reported via
   `evictedRecordings`.
+
+---
+
+# Protocol v1 additions for second-generation devices (Phase 6 §6.10)
+
+## 8. Device models and capture profiles
+
+`GET /v1/device-models` lists the registry (`ci-capture-a1`, `ci-capture-a2`) with capabilities
+(`micChannels`, `beamforming`, `onDeviceVad`, `onDeviceEncoding`, `hardwareKeystore`, `lte`).
+Registration with an unknown `model` is rejected (`422 unknown_model`).
+
+The recording plan proxied by device-management (`GET /v1/devices/{id}/recording-plan`) carries:
+
+```json
+{ "deviceModel": "ci-capture-a2",
+  "captureProfile": { "captureChannels": 4, "uploadChannels": 1, "sampleRate": 16000,
+    "encoding": "flac", "beamforming": true, "keepRawMultichannel": false,
+    "vad": { "enabled": true, "trimPreRoll": true, "trimPostRoll": true, "thresholdDb": 12, "marginMs": 1000 } },
+  "windows": [ … ] }
+```
+
+The agent clamps the profile to what it detects (microphones, `flac` binary, keystore) and never
+asks for more than the hardware can do — e.g. FLAC falls back to WAV. Uploads are always **mono**
+(delay-and-sum beamformed mixdown); `audioFormat` is `wav_pcm_s16le` or `flac`. VAD only trims
+silence inside the pre-roll (before `startsAt`) and post-roll (after `endsAt`); `startedAt`/`endedAt`
+in the recording metadata describe the uploaded (trimmed) audio.
+
+Heartbeats may include `capabilities` (what the firmware detected); device-management stores it per
+device for the fleet console.
+
+## 9. Hardware key attestation — `ci-attest-v1`
+
+Units with a secure element (a2: NXP SE050) generate the Ed25519 identity key **inside** the element
+at the factory. Registration then adds:
+
+```json
+"attestation": { "chain": ["<leaf cert>", "<intermediate cert>"], "statement": "<key attestation>" }
+```
+
+Every element is compact: `base64url(JSON payload) "." base64url(signature)`; the signature covers the
+ASCII of the first part. Signature algorithm follows the **issuer** key: Ed25519, or ECDSA P-256 with
+SHA-256 in raw IEEE-P1363 `r‖s` form (64 bytes).
+
+Certificate payload (`typ: "ci-attest-cert"`):
+
+| Field                   | Meaning                                                                              |
+| ----------------------- | ------------------------------------------------------------------------------------ |
+| `v`, `typ`              | `1`, `"ci-attest-cert"`                                                              |
+| `sub` / `iss`           | subject / issuer names; `iss` = `sub` of the next chain element, or a vendor root id |
+| `keyAlg`, `publicKey`   | `Ed25519` \| `ES256`; base64url DER SubjectPublicKeyInfo                             |
+| `ca`                    | `true` for intermediates, `false` for the leaf                                       |
+| `nbf`, `exp`            | validity window (ISO 8601)                                                           |
+| `serialNumber`, `model` | leaf only: the unit the attestation key was provisioned into                         |
+
+Statement payload (`typ: "ci-key-attest"`, signed by the leaf key):
+`{ v: 1, serialNumber, model, keyFingerprint: "sha256:<hex of identity SPKI DER>", keystore: "se050"|"tpm", nonExportable: true, generatedAt }`.
+
+Verification (device-management `src/attestation.ts`): 1–4 certificates, each within its validity
+window; intermediates must be CAs; each certificate verifies under the next one's key and the last
+under a configured vendor root (`DEVICE_ATTESTATION_ROOTS=[{"id","publicKeyPem"}]`); the leaf and the
+statement must name the registering serial and model; `keyFingerprint` must equal the registered key;
+`keystore` must match the model's `hardwareKeystore`. Failures → `422 attestation_invalid` with
+`details.reason` (`untrusted_root`, `bad_signature`, `expired`, `not_ca`, `subject_mismatch`,
+`key_mismatch`, `keystore_mismatch`, `malformed`). Models with `requiresAttestation` without evidence →
+`422 attestation_required`. The verified result is stored on the device (`attestation`).
+
+On the device the evidence lives in `identity/attestation.json` (written at the factory) and the
+key is used through the keystore abstraction (`keystore = "pkcs11"`, see `hardware/firmware`).
+
+## 10. Signed OTA updates
+
+Manifest (`base64url(canonical JSON) "." base64url(Ed25519 signature)`, keys sorted, no whitespace):
+
+```json
+{
+  "v": 1,
+  "model": "ci-capture-a2",
+  "version": "2.1.0",
+  "url": "https://…/a2-2.1.0.img",
+  "sha256": "<hex>",
+  "sizeBytes": 104857600,
+  "minVersion": "2.0.0",
+  "releasedAt": "2026-11-01T00:00:00.000Z",
+  "keyId": "release-2026"
+}
+```
+
+Manifests are signed **offline** by the release pipeline; device-management only accepts manifests
+that verify under `FIRMWARE_RELEASE_KEYS` (server-side signing exists for development only and is
+refused in production). Rollout is per release (one model): `PUT /v1/firmware/releases/{id}/rollout
+{ percent, halted? }`; a device is eligible when `sha256(releaseId:deviceId) mod 100 < percent`,
+its version is older, `minVersion` is satisfied and the release is not halted.
+
+| Method | Path                                      | Auth                                                                                 |
+| ------ | ----------------------------------------- | ------------------------------------------------------------------------------------ |
+| GET    | `/v1/devices/{id}/firmware-update`        | device → `{ updateAvailable, releaseId, version, manifest, url, sha256, sizeBytes }` |
+| POST   | `/v1/devices/{id}/firmware-update/status` | device: `{ releaseId, state: downloading\|staged\|installed\|failed, error? }`       |
+
+The agent verifies the manifest with keys pinned in its config (`ota_public_keys`), checks model,
+version and `minVersion`, streams the image with a hard size cap, verifies size + SHA-256 and only
+then stages it with `ota/pending-update.json`. The platform installer (`ota_install_command`) runs
+only when no class is being recorded; `installed` is reported after rebooting into the new version.

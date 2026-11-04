@@ -130,9 +130,10 @@ class Uploader:
         meta: dict[str, Any] = {
             "deviceId": self.device_id,
             "classroomId": entry.classroom_id,
-            "startedAt": entry.started_at,
-            "endedAt": entry.ended_at,
-            "audioFormat": AUDIO_FORMAT,
+            # VAD trimming moves the bounds to the audio actually uploaded.
+            "startedAt": entry.upload_started_at or entry.started_at,
+            "endedAt": entry.upload_ended_at or entry.ended_at,
+            "audioFormat": entry.audio_format or AUDIO_FORMAT,
             "sampleRate": entry.sample_rate,
             "channels": entry.channels,
             "fileSizeBytes": entry.size_bytes,

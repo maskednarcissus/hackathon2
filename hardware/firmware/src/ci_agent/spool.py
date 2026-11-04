@@ -21,11 +21,14 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from ci_agent.fsutil import atomic_write_json, read_json
 from ci_agent.timeutil import parse_iso, to_iso, utcnow
 from ci_agent.wav import finalize_pcm_to_wav
+
+if TYPE_CHECKING:
+    from ci_agent.pipeline import CapturePipeline
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +47,7 @@ class SpoolEntry:
     sample_rate: int
     channels: int
     pcm_file: str
+    # Name of the file that is uploaded (``.wav`` or, with FLAC encoding, ``.flac``).
     wav_file: str
     scheduled_class_id: str | None = None
     ended_at: str | None = None
@@ -57,6 +61,17 @@ class SpoolEntry:
     attempts: int = 0
     next_attempt_at: str | None = None
     last_error: str | None = None
+    # Phase 6 (gen2): capture pipeline results.
+    audio_format: str = "wav_pcm_s16le"
+    capture_channels: int | None = None
+    class_starts_at: str | None = None
+    class_ends_at: str | None = None
+    trimmed_start_ms: int = 0
+    trimmed_end_ms: int | None = None
+    encoding_note: str | None = None
+    raw_file: str | None = None
+    upload_started_at: str | None = None
+    upload_ended_at: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> SpoolEntry:
@@ -88,8 +103,10 @@ class Spool:
         hard_limit_bytes: int,
         sample_rate: int = 16000,
         channels: int = 1,
+        pipeline: CapturePipeline | None = None,
     ) -> None:
         self.directory = directory
+        self.pipeline = pipeline
         self.soft_limit_bytes = soft_limit_bytes
         self.hard_limit_bytes = hard_limit_bytes
         self.sample_rate = sample_rate
@@ -175,18 +192,26 @@ class Spool:
         return recovered
 
     def orphans(self) -> list[Path]:
-        known = {e.wav_file for e in self._entries.values()} | {
-            e.pcm_file for e in self._entries.values()
-        }
+        known = (
+            {e.wav_file for e in self._entries.values()}
+            | {e.pcm_file for e in self._entries.values()}
+            | {e.raw_file for e in self._entries.values() if e.raw_file}
+        )
         return sorted(
             p
             for p in self.directory.iterdir()
-            if p.suffix in {".wav", ".pcm"} and p.name not in known
+            if p.suffix in {".wav", ".pcm", ".flac"} and p.name not in known
         )
 
     # ------------------------------------------------------------------ lifecycle
     def begin(
-        self, classroom_id: str, scheduled_class_id: str | None, started_at: datetime
+        self,
+        classroom_id: str,
+        scheduled_class_id: str | None,
+        started_at: datetime,
+        *,
+        class_starts_at: datetime | None = None,
+        class_ends_at: datetime | None = None,
     ) -> SpoolEntry:
         local_id = str(uuid.uuid4())
         entry = SpoolEntry(
@@ -199,6 +224,8 @@ class Spool:
             channels=self.channels,
             pcm_file=f"{local_id}.pcm",
             wav_file=f"{local_id}.wav",
+            class_starts_at=to_iso(class_starts_at) if class_starts_at else None,
+            class_ends_at=to_iso(class_ends_at) if class_ends_at else None,
         )
         with self._lock:
             self._entries[local_id] = entry
@@ -207,6 +234,9 @@ class Spool:
 
     def _finalize(self, entry: SpoolEntry, ended_at: datetime) -> None:
         pcm = self.path_of(entry.pcm_file)
+        if self.pipeline is not None:
+            self._finalize_with_pipeline(entry, ended_at, self.pipeline)
+            return
         audio = finalize_pcm_to_wav(
             pcm, self.path_of(entry.wav_file), entry.sample_rate, entry.channels
         )
@@ -216,6 +246,39 @@ class Spool:
         entry.size_bytes = audio.size_bytes
         entry.checksum_sha256 = audio.checksum_sha256
         entry.duration_ms = audio.duration_ms
+
+    def _finalize_with_pipeline(
+        self, entry: SpoolEntry, ended_at: datetime, pipeline: CapturePipeline
+    ) -> None:
+        pcm = self.path_of(entry.pcm_file)
+        out = pipeline.process(
+            pcm,
+            local_id=entry.local_recording_id,
+            sample_rate=entry.sample_rate,
+            channels=entry.channels,
+            started_at=entry.started_at,
+            class_starts_at=entry.class_starts_at,
+            class_ends_at=entry.class_ends_at,
+        )
+        pcm.unlink(missing_ok=True)
+        began = parse_iso(entry.started_at)
+        entry.state = "recorded"
+        entry.ended_at = to_iso(ended_at)
+        entry.capture_channels = entry.channels
+        entry.channels = out.channels
+        entry.wav_file = out.file.name
+        entry.audio_format = out.audio_format
+        entry.size_bytes = out.size_bytes
+        entry.checksum_sha256 = out.checksum_sha256
+        entry.duration_ms = out.duration_ms
+        entry.trimmed_start_ms = out.trimmed_start_ms
+        entry.trimmed_end_ms = out.trimmed_end_ms
+        entry.encoding_note = out.encoding_note
+        entry.raw_file = out.raw_file.name if out.raw_file else None
+        # The uploaded audio covers [start + trimmed_start, start + trimmed_start + duration).
+        upload_start = began + timedelta(milliseconds=out.trimmed_start_ms)
+        entry.upload_started_at = to_iso(upload_start)
+        entry.upload_ended_at = to_iso(upload_start + timedelta(milliseconds=out.duration_ms))
 
     def finish(self, local_recording_id: str, ended_at: datetime) -> SpoolEntry:
         with self._lock:
@@ -263,7 +326,9 @@ class Spool:
     # ------------------------------------------------------------------ quota
     def _entry_bytes(self, entry: SpoolEntry) -> int:
         total = 0
-        for name in (entry.wav_file, entry.pcm_file):
+        for name in (entry.wav_file, entry.pcm_file, entry.raw_file):
+            if not name:
+                continue
             path = self.path_of(name)
             if path.exists():
                 total += path.stat().st_size
@@ -276,6 +341,8 @@ class Spool:
     def _remove(self, entry: SpoolEntry) -> None:
         self.path_of(entry.wav_file).unlink(missing_ok=True)
         self.path_of(entry.pcm_file).unlink(missing_ok=True)
+        if entry.raw_file:
+            self.path_of(entry.raw_file).unlink(missing_ok=True)
         del self._entries[entry.local_recording_id]
 
     def purge_uploaded(self, now: datetime, retention: timedelta) -> int:

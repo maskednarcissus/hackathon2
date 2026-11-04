@@ -36,6 +36,21 @@ every 1 s   run queued remote commands (one at a time) and retry unreported resu
   (oldest first, never the live capture) only above the hard limit, with an incident that
   is logged and reported as `evictedRecordings` in heartbeats.
 
+## Second-generation hardware (phase 6.10)
+
+| Concern              | Module                        | Behaviour                                                                                                                                                    |
+| -------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Capability detection | `capabilities.py`             | model defaults + ALSA channel probe, `flac` binary, keystore, LTE modem; reported in heartbeats                                                              |
+| Capture profile      | `capabilities.py`, `agent.py` | `captureProfile` from the recording plan, clamped to the hardware (FLAC → WAV if no encoder)                                                                 |
+| Multichannel capture | `recorder.py`, `cli.py`       | `arecord -c N`; channels follow the profile                                                                                                                  |
+| Beamforming          | `dsp.py`                      | streaming delay-and-sum to a mono mixdown (`mic_positions`, `beam_azimuth_deg`); raw multichannel kept only if `keepRawMultichannel`                         |
+| VAD                  | `dsp.py`, `pipeline.py`       | 20 ms energy frames vs. noise floor; trims silence only in pre/post-roll; metadata `startedAt`/`endedAt` follow the trimmed audio                            |
+| Encoding             | `pipeline.py`                 | `flac --best --verify` when installed (`audioFormat: flac`), else WAV (reason in `encoding_note`)                                                            |
+| Keystore             | `keystore.py`                 | `file` (Ed25519 PEM) or `pkcs11` (SE050/TPM via PyKCS11: `pip install .[pkcs11]`); factory attestation from `identity/attestation.json` sent at registration |
+| OTA                  | `ota.py`                      | pinned Ed25519 release keys (`ota_public_keys`), manifest + SHA-256 + size verified before staging; installer (`ota_install_command`) only when idle         |
+
+Protocol details: [`../device-protocol/README.md`](../device-protocol/README.md) §8–§10.
+
 ## Remote commands (phase 4.7)
 
 Administrators queue commands in device-management (`POST /v1/devices/{id}/commands`); they

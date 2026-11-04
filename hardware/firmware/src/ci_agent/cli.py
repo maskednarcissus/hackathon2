@@ -15,10 +15,14 @@ from typing import Any
 
 from ci_agent.agent import Agent, AgentSettings
 from ci_agent.api import DeviceManagementApi, IngestionApi, register_device
+from ci_agent.capabilities import detect_capabilities
 from ci_agent.commands import CommandDeps, CommandRunner, build_handlers, parse_command_line
 from ci_agent.config import AgentConfig, load_config
+from ci_agent.dsp import parse_mic_positions, steering_delays
 from ci_agent.fsutil import atomic_write_json, read_json
-from ci_agent.identity import DeviceIdentity
+from ci_agent.keystore import Keystore, open_keystore
+from ci_agent.ota import OtaClient, load_trusted_keys
+from ci_agent.pipeline import CapturePipeline
 from ci_agent.recorder import ArecordSource, AudioSource, FakeSource, Recorder
 from ci_agent.scheduler import ClockGuard, PlanStore
 from ci_agent.spool import Spool
@@ -34,9 +38,32 @@ def _registration(config: AgentConfig) -> dict[str, Any]:
     return data
 
 
+def _keystore(config: AgentConfig) -> Keystore:
+    return open_keystore(
+        config.keystore,
+        key_path=config.private_key_path,
+        attestation_path=config.attestation_path,
+        pkcs11_module=config.pkcs11_module,
+        pkcs11_token_label=config.pkcs11_token_label,
+        pkcs11_key_label=config.pkcs11_key_label,
+    )
+
+
 def cmd_init(config: AgentConfig, _args: argparse.Namespace) -> int:
-    identity = DeviceIdentity.load_or_create(config.private_key_path)
-    print(json.dumps({"publicKeyFingerprint": identity.public_key_fingerprint()}))
+    keystore = _keystore(config)
+    caps = detect_capabilities(
+        config.model, audio_device=config.audio_device, keystore=keystore.kind
+    )
+    print(
+        json.dumps(
+            {
+                "publicKeyFingerprint": keystore.public_key_fingerprint(),
+                "keystore": keystore.kind,
+                "attestation": keystore.attestation() is not None,
+                "capabilities": caps.report(),
+            }
+        )
+    )
     return 0
 
 
@@ -45,7 +72,7 @@ def cmd_register(config: AgentConfig, args: argparse.Namespace) -> int:
         raise SystemExit("serial_number must be configured")
     if config.registration_path.exists() and not args.force:
         raise SystemExit("already registered (use --force to re-register)")
-    identity = DeviceIdentity.load_or_create(config.private_key_path)
+    identity = _keystore(config)
     result = register_device(
         config.device_management_url,
         provisioning_token=args.token,
@@ -54,6 +81,7 @@ def cmd_register(config: AgentConfig, args: argparse.Namespace) -> int:
         firmware_version=config.firmware_version,
         identity=identity,
         timeout=config.http_timeout_s,
+        attestation=identity.attestation(),
     )
     atomic_write_json(
         config.registration_path,
@@ -71,7 +99,10 @@ def cmd_register(config: AgentConfig, args: argparse.Namespace) -> int:
 def build_agent(config: AgentConfig, fake_audio: bool = False) -> Agent:
     registration = _registration(config)
     device_id = str(registration["deviceId"])
-    identity = DeviceIdentity.load(config.private_key_path)
+    identity = _keystore(config)
+    caps = detect_capabilities(
+        config.model, audio_device=config.audio_device, keystore=identity.kind
+    )
     dm = DeviceManagementApi(
         config.device_management_url, identity, device_id, timeout=config.http_timeout_s
     )
@@ -87,9 +118,16 @@ def build_agent(config: AgentConfig, fake_audio: bool = False) -> Agent:
     )
 
     def source() -> AudioSource:
+        # Channels/rate follow the model capture profile (plan) clamped to the hardware.
+        profile = agent.capture_profile()
         if fake_audio:
-            return FakeSource(config.sample_rate, config.channels, realtime=True)
-        return ArecordSource(config.audio_device, config.sample_rate, config.channels)
+            return FakeSource(profile.sample_rate, profile.capture_channels, realtime=True)
+        return ArecordSource(config.audio_device, profile.sample_rate, profile.capture_channels)
+
+    positions = parse_mic_positions(config.mic_positions)
+
+    def delays(channels: int, sample_rate: int) -> list[int]:
+        return steering_delays(positions, config.beam_azimuth_deg, sample_rate, channels)
 
     agent = Agent(
         AgentSettings(
@@ -119,6 +157,20 @@ def build_agent(config: AgentConfig, fake_audio: bool = False) -> Agent:
             backoff_max_s=config.upload_backoff_max_s,
         ),
     )
+    agent.capabilities = caps
+    spool.pipeline = CapturePipeline(agent.capture_profile, delays)
+    trusted = load_trusted_keys(config.ota_public_keys)
+    if trusted:
+        agent.ota = OtaClient(
+            dm,
+            model=config.model,
+            current_version=config.firmware_version,
+            trusted_keys=trusted,
+            staging_dir=config.ota_dir,
+            max_bytes=config.ota_max_bytes,
+            install_command=parse_command_line(config.ota_install_command),
+        )
+        agent.settings.ota_check_interval = timedelta(seconds=config.ota_check_interval_s)
     agent.commands = CommandRunner(
         build_handlers(
             CommandDeps(

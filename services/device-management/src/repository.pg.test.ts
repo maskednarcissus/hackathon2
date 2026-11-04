@@ -2,7 +2,9 @@
  * Postgres behavioural suite (integration stage §1). Runs only with TEST_DATABASE_URL, e.g.
  *   TEST_DATABASE_URL='postgresql://ci@/postgres?host=/var/tmp/cipg&port=5433' pnpm test
  */
+import { generateKeyPairSync } from 'node:crypto';
 import type { LightMyRequestResponse } from 'fastify';
+import { signManifest } from './firmware.js';
 import type pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { PgDeviceRepository } from './repository.pg.js';
@@ -57,7 +59,10 @@ describe.skipIf(!TEST_DATABASE_URL)('PgDeviceRepository (Postgres)', () => {
   let h: Harness;
 
   beforeAll(async () => {
-    db = await createTestDatabase(TEST_DATABASE_URL ?? '', ['device-management.sql']);
+    db = await createTestDatabase(TEST_DATABASE_URL ?? '', [
+      'device-management.sql',
+      'device-management-phase6.sql',
+    ]);
     await seedOrganization(db.pool);
   }, 60_000);
 
@@ -67,7 +72,7 @@ describe.skipIf(!TEST_DATABASE_URL)('PgDeviceRepository (Postgres)', () => {
 
   beforeEach(async () => {
     await db.pool.query(
-      'TRUNCATE device_commands, device_heartbeats, device_assignments, device_provisioning_tokens, capture_devices CASCADE',
+      'TRUNCATE device_firmware_update_reports, firmware_releases, device_commands, device_heartbeats, device_assignments, device_provisioning_tokens, capture_devices CASCADE',
     );
     h = createHarness({ repo: new PgDeviceRepository(db.pool) });
   });
@@ -328,5 +333,75 @@ describe.skipIf(!TEST_DATABASE_URL)('PgDeviceRepository (Postgres)', () => {
     });
     expect(res.statusCode).toBe(422);
     expect(code(res.body)).toBe('invalid_reference');
+  });
+
+  it('stores firmware releases, rollout changes and update reports', async () => {
+    const d = await registerDevice(h, 'CI-PG-0012');
+    const key = generateKeyPairSync('ed25519');
+    const signer = createHarness({ repo: new PgDeviceRepository(db.pool) });
+    // Re-build with a release key trusted (uses the same database).
+    const { buildApp } = await import('./app.js');
+    const built = buildApp({
+      adminToken: 'test-admin-token',
+      firmwareTrustedKeys: new Map([['k1', key.publicKey]]),
+      deps: { ...signer.deps, repo: new PgDeviceRepository(db.pool) },
+    });
+    const manifest = signManifest(
+      {
+        v: 1,
+        model: 'ci-capture-a1',
+        version: '1.1.0',
+        url: 'https://firmware.example/a1-1.1.0.img',
+        sha256: 'c'.repeat(64),
+        sizeBytes: 1000,
+        releasedAt: '2026-11-01T00:00:00.000Z',
+        keyId: 'k1',
+      },
+      key.privateKey,
+    );
+    const created = await built.app.inject({
+      method: 'POST',
+      url: '/v1/firmware/releases',
+      headers: adminHeaders,
+      payload: { manifest },
+    });
+    expect(created.statusCode).toBe(201);
+    const releaseId = created.json<{ releaseId: string }>().releaseId;
+    const dup = await built.app.inject({
+      method: 'POST',
+      url: '/v1/firmware/releases',
+      headers: adminHeaders,
+      payload: { manifest },
+    });
+    expect(dup.statusCode).toBe(409);
+    await built.app.inject({
+      method: 'PUT',
+      url: `/v1/firmware/releases/${releaseId}/rollout`,
+      headers: adminHeaders,
+      payload: { percent: 100 },
+    });
+    const offer = await signedInject(
+      { ...signer, app: built.app },
+      d,
+      'GET',
+      `/v1/devices/${d.deviceId}/firmware-update`,
+    );
+    expect(offer.json()).toMatchObject({ updateAvailable: true, version: '1.1.0', manifest });
+    for (const state of ['downloading', 'staged'] as const) {
+      await signedInject(
+        { ...signer, app: built.app },
+        d,
+        'POST',
+        `/v1/devices/${d.deviceId}/firmware-update/status`,
+        {
+          releaseId,
+          state,
+        },
+      );
+    }
+    const reports = await new PgDeviceRepository(db.pool).listUpdateReports({ releaseId });
+    expect(reports.map((r) => r.state)).toEqual(['staged']);
+    const release = await new PgDeviceRepository(db.pool).getRelease(releaseId);
+    expect(release).toMatchObject({ rolloutPercent: 100, halted: false, manifest });
   });
 });

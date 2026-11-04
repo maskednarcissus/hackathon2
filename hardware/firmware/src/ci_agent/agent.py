@@ -12,8 +12,15 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 
+from ci_agent.capabilities import (
+    CaptureProfile,
+    DeviceCapabilities,
+    default_profile,
+    effective_profile,
+)
 from ci_agent.commands import CommandRunner
 from ci_agent.heartbeat import HeartbeatContext, build_heartbeat
+from ci_agent.ota import OtaClient
 from ci_agent.recorder import Recorder
 from ci_agent.scheduler import ClockGuard, DesiredState, PlanStore, RecordingPlan, desired_state
 from ci_agent.spool import Spool
@@ -45,6 +52,7 @@ class AgentSettings:
     upload_interval: timedelta = timedelta(seconds=30)
     uploaded_retention: timedelta = timedelta(hours=24)
     reconcile_interval_s: float = 1.0
+    ota_check_interval: timedelta = timedelta(hours=6)
 
 
 class Agent:
@@ -60,7 +68,12 @@ class Agent:
         uploader: Uploader,
         clock: Callable[[], datetime] = utcnow,
         commands: CommandRunner | None = None,
+        capabilities: DeviceCapabilities | None = None,
+        ota: OtaClient | None = None,
     ) -> None:
+        self.capabilities = capabilities
+        self.ota = ota
+        self.last_ota_check_at: datetime | None = None
         self.settings = settings
         self.commands = commands
         self._upload_lock = threading.Lock()
@@ -103,6 +116,36 @@ class Agent:
             log.warning("%s (using cached plan)", self.last_error)
             return False
 
+    def capture_profile(self) -> CaptureProfile:
+        """Server profile (from the cached plan) clamped to the detected hardware."""
+        plan = self.plans.plan
+        requested = (
+            CaptureProfile.from_json(plan.capture_profile)
+            if plan and plan.capture_profile
+            else None
+        )
+        if self.capabilities is None:
+            return requested or default_profile("ci-capture-a1")
+        profile, _notes = effective_profile(requested, self.capabilities)
+        return profile
+
+    # --------------------------------------------------------------- OTA
+    def check_firmware(self, force: bool = False) -> None:
+        if self.ota is None:
+            return
+        now = self.clock()
+        due = self.last_ota_check_at is None or (
+            now - self.last_ota_check_at >= self.settings.ota_check_interval
+        )
+        if not (force or due):
+            return
+        self.last_ota_check_at = now
+        try:
+            result = self.ota.check_and_stage(recording=self.recorder.active is not None)
+            log.info("firmware check: %s", result.state)
+        except Exception as exc:  # OTA must never disturb capture
+            log.warning("firmware check failed: %s", exc)
+
     # --------------------------------------------------------------- recorder
     def reconcile(self) -> DesiredState:
         now = self.now()
@@ -125,7 +168,13 @@ class Agent:
             plan = self.plans.plan
             assert plan is not None
             try:
-                entry = self.recorder.start(plan.classroom_id, want_class)
+                window = target.window
+                entry = self.recorder.start(
+                    plan.classroom_id,
+                    want_class,
+                    class_starts_at=window.starts_at if window else None,
+                    class_ends_at=window.ends_at if window else None,
+                )
             except Exception as exc:
                 self.last_error = f"recorder start failed: {exc}"
                 log.exception("could not start recording")
@@ -157,6 +206,7 @@ class Agent:
             plan_fetched_at=self.plans.fetched_at,
             clock_skew_ms=self.clock_guard.skew_ms,
             last_error=self.last_error or self.recorder.last_error,
+            capabilities=self.capabilities.report() if self.capabilities else None,
         )
         return build_heartbeat(self.now(), self.settings.data_dir, self.spool.stats(), ctx)
 
@@ -255,6 +305,7 @@ class Agent:
             asyncio.create_task(loop(self.send_heartbeat, 5.0)),
             asyncio.create_task(loop(self.upload, 5.0)),
             asyncio.create_task(loop(self.process_commands, 1.0)),
+            asyncio.create_task(loop(self.check_firmware, 60.0)),
         ]
         await stop.wait()
         await asyncio.gather(*tasks)

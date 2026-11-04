@@ -90,6 +90,9 @@ class RecordingPlan:
     generated_at: datetime
     timezone: str
     windows: tuple[RecordingWindow, ...] = field(default_factory=tuple)
+    # Phase 6: per-model capture profile added by device-management (raw JSON, see capabilities).
+    capture_profile: dict[str, Any] | None = None
+    device_model: str | None = None
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> RecordingPlan:
@@ -104,6 +107,10 @@ class RecordingPlan:
             generated_at=parse_iso(data["generatedAt"]),
             timezone=str(data.get("timezone", "America/Sao_Paulo")),
             windows=tuple(sorted(windows, key=lambda w: w.record_start_at)),
+            capture_profile=data.get("captureProfile")
+            if isinstance(data.get("captureProfile"), dict)
+            else None,
+            device_model=data.get("deviceModel"),
         )
 
     def to_json(self) -> dict[str, Any]:
@@ -112,6 +119,8 @@ class RecordingPlan:
             "generatedAt": to_iso(self.generated_at),
             "timezone": self.timezone,
             "windows": [w.to_json() for w in self.windows],
+            **({"captureProfile": self.capture_profile} if self.capture_profile else {}),
+            **({"deviceModel": self.device_model} if self.device_model else {}),
         }
 
     def next_window(self, now: datetime) -> RecordingWindow | None:
