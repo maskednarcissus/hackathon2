@@ -1,0 +1,11 @@
+﻿{
+  "name": "@ci/shared-config",
+  "version": "0.1.0",
+  "main": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  }
+}

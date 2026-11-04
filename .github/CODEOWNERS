@@ -1,0 +1,26 @@
+# Global owners
+* @classroom-intelligence/platform-team
+
+# AI and processing — requires AI team review
+/services/ai-gateway/ @classroom-intelligence/ai-team
+/services/lecture-intelligence/ @classroom-intelligence/ai-team
+/services/event-extraction/ @classroom-intelligence/ai-team
+/services/transcription/ @classroom-intelligence/ai-team
+/services/speaker-diarization/ @classroom-intelligence/ai-team
+
+# Data model — requires data team review
+/data/ @classroom-intelligence/data-team
+
+# Security and governance — requires security review
+/services/identity/ @classroom-intelligence/security-team
+/services/audit/ @classroom-intelligence/security-team
+/docs/security/ @classroom-intelligence/security-team
+/docs/privacy/ @classroom-intelligence/security-team
+
+# Hardware — requires hardware team review
+/hardware/ @classroom-intelligence/hardware-team
+/services/device-management/ @classroom-intelligence/hardware-team
+/services/audio-ingestion/ @classroom-intelligence/hardware-team
+
+# Infrastructure
+/infrastructure/ @classroom-intelligence/infra-team

@@ -1,0 +1,30 @@
+FROM node:20-alpine AS base
+RUN corepack enable pnpm
+WORKDIR /app
+
+FROM base AS deps
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY apps/ apps/
+COPY services/ services/
+COPY packages/ packages/
+RUN pnpm install --frozen-lockfile --prod
+
+FROM base AS builder
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY apps/ apps/
+COPY services/ services/
+COPY packages/ packages/
+RUN pnpm install --frozen-lockfile
+ARG SERVICE_PATH
+COPY ${SERVICE_PATH} ${SERVICE_PATH}
+RUN pnpm --filter ${SERVICE_PATH} build
+
+FROM node:20-alpine AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+ARG SERVICE_PATH
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=builder /app/${SERVICE_PATH}/dist ./${SERVICE_PATH}/dist
+COPY --from=builder /app/${SERVICE_PATH}/package.json ./${SERVICE_PATH}/package.json
+EXPOSE 4000
+CMD ["node", "dist/index.js"]

@@ -1,0 +1,55 @@
+# Classroom Intelligence — Audio Evaluation Benchmark Manifest
+version: "1.0"
+gcs_bucket: "ci-eval-audio"
+gcs_prefix: "benchmark/v1/"
+
+test_cases:
+  - id: pt-br-medicine-lecture-90min
+    description: Medical school lecture, Brazilian Portuguese, 90 minutes, single professor
+    language: pt-BR
+    discipline: medicine
+    duration_minutes: 90
+    speakers: 1
+    acoustic_condition: standard_classroom
+    expected_wer_max: 0.08
+    expected_terminology_accuracy_min: 0.92
+
+  - id: pt-br-law-lecture-120min
+    description: Law school lecture, Brazilian Portuguese, 120 minutes, professor + student questions
+    language: pt-BR
+    discipline: law
+    duration_minutes: 120
+    speakers: 3
+    acoustic_condition: standard_classroom
+    expected_wer_max: 0.10
+    expected_terminology_accuracy_min: 0.90
+
+  - id: pt-br-engineering-noisy
+    description: Engineering lecture with background HVAC noise
+    language: pt-BR
+    discipline: engineering
+    duration_minutes: 60
+    speakers: 1
+    acoustic_condition: high_background_noise
+    expected_wer_max: 0.15
+    expected_terminology_accuracy_min: 0.85
+
+  - id: pt-br-economics-reverberant
+    description: Economics lecture in a large auditorium with reverberation
+    language: pt-BR
+    discipline: economics
+    duration_minutes: 90
+    speakers: 1
+    acoustic_condition: reverberant_auditorium
+    expected_wer_max: 0.12
+    expected_terminology_accuracy_min: 0.88
+
+metrics:
+  primary:
+    - word_error_rate
+    - character_error_rate
+    - academic_terminology_accuracy
+  secondary:
+    - timestamp_alignment_ms
+    - processing_latency_ms
+    - cost_per_hour_usd

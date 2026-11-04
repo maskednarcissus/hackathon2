@@ -1,0 +1,472 @@
+openapi: 3.1.0
+info:
+  title: Classroom Intelligence API
+  version: 0.1.0
+  description: >
+    Backend-for-Frontend (BFF) and core application API for Classroom Intelligence.
+    Serves Student, Professor, Coordinator, and Institutional Administrator workspaces.
+servers:
+  - url: http://localhost:4000
+    description: Local development API server
+  - url: https://api.ci.internal
+    description: Production internal gateway
+
+paths:
+  /health:
+    get:
+      summary: API Health Check
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  service:
+                    type: string
+                    example: classroom-intelligence-api
+
+  /api/v1/recordings:
+    get:
+      summary: List classroom recordings
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: classroomId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: date
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: status
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Paginated recordings list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedRecordings'
+
+  /api/v1/recordings/{id}:
+    get:
+      summary: Get details of a single recording session
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Recording details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingSession'
+
+  /api/v1/recordings/{id}/transcript:
+    get:
+      summary: Get transcript and segments for a recording
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Full transcript with timestamped segments
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transcript'
+
+  /api/v1/recordings/{id}/summary:
+    get:
+      summary: Get generated structured lecture summary
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Lecture summary, topics, concepts, and Q&A
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LectureSummary'
+
+  /api/v1/transcripts/{id}/segments/{segmentId}:
+    patch:
+      summary: Professor correction to a transcript segment
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: segmentId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [correctedText]
+              properties:
+                correctedText:
+                  type: string
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: Segment updated with correction history
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TranscriptSegment'
+
+  /api/v1/events:
+    get:
+      summary: List extracted academic events
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: courseId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: confirmationStatus
+          in: query
+          schema:
+            type: string
+            enum: [suggested, awaiting_professor, awaiting_admin, confirmed, published, rejected]
+        - name: fromDate
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: toDate
+          in: query
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Extracted academic events
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ExtractedEvent'
+
+  /api/v1/events/{id}/confirm:
+    post:
+      summary: Confirm or publish an extracted academic announcement
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                notes:
+                  type: string
+      responses:
+        '200':
+          description: Event successfully confirmed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExtractedEvent'
+
+  /api/v1/events/{id}/reject:
+    post:
+      summary: Reject an extracted academic announcement
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: Event marked as rejected
+
+  /api/v1/calendar:
+    get:
+      summary: Get student or course academic calendar
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: month
+          in: query
+          schema:
+            type: string
+            example: '2026-11'
+      responses:
+        '200':
+          description: Calendar events
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CalendarEvent'
+
+  /api/v1/devices:
+    get:
+      summary: List fleet capture devices (Admin)
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Fleet devices
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CaptureDevice'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    RecordingSession:
+      type: object
+      required: [id, deviceId, classroomId, startedAt, audioFormat, sampleRate, channels, uploadStatus, captureStatus]
+      properties:
+        id:
+          type: string
+          format: uuid
+        deviceId:
+          type: string
+          format: uuid
+        classroomId:
+          type: string
+          format: uuid
+        scheduledClassId:
+          type: string
+          format: uuid
+        startedAt:
+          type: string
+          format: date-time
+        endedAt:
+          type: string
+          format: date-time
+        durationSeconds:
+          type: integer
+        audioFormat:
+          type: string
+        sampleRate:
+          type: integer
+        channels:
+          type: integer
+        uploadStatus:
+          type: string
+          enum: [pending, uploading, complete, failed]
+        captureStatus:
+          type: string
+          enum: [in_progress, complete, failed, partial]
+
+    PaginatedRecordings:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecordingSession'
+        total:
+          type: integer
+
+    TranscriptSegment:
+      type: object
+      required: [id, transcriptId, startMs, endMs, text, confidence, language, correctionStatus]
+      properties:
+        id:
+          type: string
+          format: uuid
+        transcriptId:
+          type: string
+          format: uuid
+        startMs:
+          type: integer
+        endMs:
+          type: integer
+        text:
+          type: string
+        speakerLabel:
+          type: string
+        confidence:
+          type: number
+        language:
+          type: string
+        correctionStatus:
+          type: string
+          enum: [original, corrected]
+
+    Transcript:
+      type: object
+      required: [id, recordingSessionId, language, segments]
+      properties:
+        id:
+          type: string
+          format: uuid
+        recordingSessionId:
+          type: string
+          format: uuid
+        language:
+          type: string
+        segments:
+          type: array
+          items:
+            $ref: '#/components/schemas/TranscriptSegment'
+
+    LectureSummary:
+      type: object
+      required: [id, scheduledClassId, title, executiveSummary, topics, concepts]
+      properties:
+        id:
+          type: string
+          format: uuid
+        scheduledClassId:
+          type: string
+          format: uuid
+        title:
+          type: string
+        executiveSummary:
+          type: string
+        topics:
+          type: array
+          items:
+            type: object
+            properties:
+              title: { type: string }
+              order: { type: integer }
+        concepts:
+          type: array
+          items:
+            type: object
+            properties:
+              term: { type: string }
+              definition: { type: string }
+
+    ExtractedEvent:
+      type: object
+      required: [id, transcriptSegmentId, courseId, eventType, title, confidenceOverall, confirmationStatus]
+      properties:
+        id:
+          type: string
+          format: uuid
+        transcriptSegmentId:
+          type: string
+          format: uuid
+        courseId:
+          type: string
+          format: uuid
+        eventType:
+          type: string
+          enum: [examination, quiz, assignment, project, presentation, reading_deadline, class_cancellation, class_reschedule, room_change, other]
+        title:
+          type: string
+        description:
+          type: string
+        eventDate:
+          type: string
+          format: date
+        confidenceOverall:
+          type: number
+        confirmationStatus:
+          type: string
+          enum: [suggested, awaiting_professor, awaiting_admin, confirmed, published, rejected]
+
+    CalendarEvent:
+      type: object
+      required: [id, title, eventType, eventDate, isOfficial]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        eventType:
+          type: string
+        eventDate:
+          type: string
+          format: date
+        isOfficial:
+          type: boolean
+
+    CaptureDevice:
+      type: object
+      required: [id, serialNumber, model, firmwareVersion, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        serialNumber:
+          type: string
+        model:
+          type: string
+        firmwareVersion:
+          type: string
+        status:
+          type: string
+          enum: [online, offline, recording, uploading, attention_required, maintenance, decommissioned]

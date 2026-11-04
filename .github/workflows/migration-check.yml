@@ -1,0 +1,41 @@
+name: Migration Check
+
+on:
+  pull_request:
+    paths:
+      - 'data/migrations/**'
+
+jobs:
+  validate-migrations:
+    name: Validate SQL Migrations
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci_test
+          POSTGRES_DB: classroom_intelligence_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install golang-migrate
+        run: |
+          curl -L https://github.com/golang-migrate/migrate/releases/download/v4.18.1/migrate.linux-amd64.tar.gz | tar xvz
+          sudo mv migrate /usr/local/bin/
+      - name: Run migrations
+        env:
+          DATABASE_URL: postgres://ci:ci_test@localhost:5432/classroom_intelligence_test?sslmode=disable
+        run: |
+          migrate -path data/migrations -database "$DATABASE_URL" up
+      - name: Verify schema
+        env:
+          PGPASSWORD: ci_test
+        run: |
+          psql -h localhost -U ci -d classroom_intelligence_test -c "\dt" | grep -E "holding_companies|institutions|campuses|academic_terms|courses|students|professors|recording_sessions|transcripts|extracted_events|audit_events"
