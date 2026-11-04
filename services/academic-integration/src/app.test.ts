@@ -263,6 +263,24 @@ describe('schedule import (1.14)', () => {
   });
 });
 
+describe('scheduled classes query', () => {
+  it('lists upcoming classes of a section from a given instant', async () => {
+    const { app } = setup();
+    await app.inject({ method: 'POST', url: '/v1/imports', payload: payload() });
+    const [first] = await listRoom(app, ROOM, '2026-11-01T00:00:00Z', '2026-11-10T00:00:00Z');
+    const section = first?.classSectionId ?? '';
+    const res = await app.inject({
+      url: `/v1/scheduled-classes?classSectionId=${section}&from=2026-11-04T13:00:00Z&limit=3`,
+    });
+    const items = res.json<{ items: ScheduledClass[]; truncated: boolean }>();
+    expect(items.items.map((c) => c.localDate)).toEqual(['2026-11-07', '2026-11-09', '2026-11-11']);
+    expect(items.truncated).toBe(true);
+    expect(
+      (await app.inject({ url: '/v1/scheduled-classes?from=2026-11-04T12:00:00Z' })).statusCode,
+    ).toBe(400);
+  });
+});
+
 describe('class identification (1.13)', () => {
   it('identifies the class of a recording and audits the decision', async () => {
     const { app, audit } = setup();

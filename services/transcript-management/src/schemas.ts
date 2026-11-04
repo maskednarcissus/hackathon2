@@ -41,6 +41,8 @@ export const CreateTranscriptSchema = z
   .object({
     recordingSessionId: z.string().uuid(),
     scheduledClassId: z.string().uuid().optional(),
+    classSectionId: z.string().uuid().optional(),
+    institutionId: z.string().uuid().optional(),
     language: z
       .string()
       .regex(/^[a-z]{2,3}(-[A-Z]{2})?$/)
@@ -116,3 +118,36 @@ export const SpeakerAssignmentSchema = z
       seen.add(a.segmentIndex);
     });
   });
+
+export const CorrectionSchema = z.object({
+  correctedText: z.string().trim().min(1).max(20_000),
+  /** Must equal the X-Actor-Id header; defaults to it. */
+  correctedBy: z.string().uuid().optional(),
+  reason: z.string().trim().max(1000).optional(),
+});
+
+export const ActorHeadersSchema = z.object({
+  'x-actor-id': z.string().uuid(),
+  'x-actor-role': z.enum(['student', 'professor', 'coordinator', 'admin']),
+});
+
+export const VersionQuerySchema = z.object({
+  version: z.enum(['latest', 'original']).default('latest'),
+});
+
+export const SearchQuerySchema = z.object({
+  q: z.string().trim().min(1).max(500),
+  classSectionIds: z
+    .string()
+    .transform((v) => [
+      ...new Set(
+        v
+          .split(',')
+          .map((x) => x.trim())
+          .filter(Boolean),
+      ),
+    ])
+    .pipe(z.array(z.string().uuid()).min(1, 'at least one classSectionId is required').max(500)),
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+  mode: z.enum(['hybrid', 'lexical', 'semantic']).default('hybrid'),
+});

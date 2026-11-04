@@ -168,3 +168,62 @@ describe('audit service', () => {
     expect(res.timeline[1]?.occurredAt).toBe('2026-11-04T16:30:00.000Z');
   });
 });
+
+describe('integration shapes', () => {
+  it('accepts institutionId as an alias of tenantId and service-name actor ids', async () => {
+    const { app, repo } = setup();
+    const r = await post(app, {
+      institutionId: TENANT,
+      actorId: 'speaker-diarization',
+      action: 'diarization.completed',
+      resourceType: 'transcript',
+      metadata: { speakerCount: 2 },
+    });
+    expect(r.statusCode).toBe(201);
+    expect(r.json()).toMatchObject({
+      tenantId: TENANT,
+      actorId: null,
+      metadata: { speakerCount: 2, actorLabel: 'speaker-diarization' },
+    });
+    expect(await repo.chain(TENANT)).toHaveLength(1);
+
+    const noMeta = (
+      await post(app, {
+        institutionId: TENANT,
+        actorId: 'transcription',
+        action: 'transcription.started',
+        resourceType: 'recording_session',
+      })
+    ).json<{ metadata: unknown; occurredAt: string }>();
+    expect(noMeta.metadata).toEqual({ actorLabel: 'transcription' });
+    expect(noMeta.occurredAt).toBeTruthy();
+
+    const uuidActor = (
+      await post(app, {
+        tenantId: TENANT,
+        actorId: REC,
+        action: 'recording.uploaded',
+        resourceType: 'recording_session',
+      })
+    ).json<{ actorId: string; metadata: unknown }>();
+    expect(uuidActor).toMatchObject({ actorId: REC, metadata: null });
+
+    const conflict = await post(app, {
+      tenantId: TENANT,
+      institutionId: OTHER,
+      action: 'upload.started',
+      resourceType: 'upload',
+    });
+    expect(conflict.statusCode).toBe(400);
+  });
+
+  it('accepts every action emitted by the platform services', async () => {
+    const { app } = setup();
+    const emitted =
+      'alert.acknowledged alert.raised alert.resolved audio.quality_assessed audio.segmented auth.locked auth.login_failed auth.login_succeeded auth.logout auth.refresh_reuse_detected auth.user_created calendar.event_published calendar.event_updated calendar.feed_token_rotated content.report_resolved content.reported device.assigned device.certificate_revoked device.heartbeat_missed device.provisioning_token_created device.registered device.status_changed device.unassigned diarization.completed diarization.failed event.confirmed event.deduplicated event.edited event.extracted event.published event.rejected event.updated ai.generation lecture.structured recording.class_identified recording.metadata_received recording.missed recording.scheduled recording.segmented recording.started recording.stopped recording.uploaded transcript.corrected transcript.created transcription.completed transcription.failed transcription.started upload.completed upload.failed upload.started';
+    for (const action of emitted.split(' ')) {
+      const r = await post(app, { action, resourceType: 'x' });
+      expect(r.statusCode, action).toBe(201);
+    }
+  });
+});

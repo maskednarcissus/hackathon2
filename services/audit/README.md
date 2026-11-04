@@ -1,14 +1,16 @@
 # Audit Service
 
-Append-only, tamper-evident audit log (Phase 1 deliverable 1.18). Port `4011`.
+Append-only, tamper-evident audit log (1.18) and content reports (3.15). Port `4011`.
 
 ## Responsibilities
 
 - Immutable audit event log — no update or delete routes exist
-- Recording lifecycle action catalog (`src/catalog.ts`, contract §9 of
-  `docs/architecture/phase-1-capture-pipeline.md`): actions in the governed namespaces
-  `device.`, `recording.`, `upload.`, `audio.`, `transcription.`, `diarization.`, `alert.`
-  must be in the catalog; other namespaces (e.g. `lecture.viewed`) are free-form
+- Action catalog (`src/catalog.ts`; phase-1 §9, phase-2 §8, phase-3 §2/§7). Governed namespaces
+  `device.`, `recording.`, `upload.`, `audio.`, `transcription.`, `diarization.`, `alert.`, `transcript.`,
+  `content.`, `auth.`, `ai.` accept only catalogued actions; `lecture.*`, `event.*`, `calendar.*` accept any
+  well-formed action; other namespaces are free-form. `actorId` may be `null`
+- Integration shapes: `institutionId` is accepted as an alias of `tenantId`; a non-UUID `actorId` (service name,
+  e.g. `"transcription"`) is stored as `actorId: null` with `metadata.actorLabel`; `occurredAt` defaults to now
 - Per-tenant hash chain: `hash = sha256(prevHash + canonicalJson(body))`, genesis `prevHash` = 64 zeros
 - Chain verification reporting the first broken link
 - Recording lifecycle timeline per recording session
@@ -22,7 +24,14 @@ Append-only, tamper-evident audit log (Phase 1 deliverable 1.18). Port `4011`.
 | `GET`  | `/v1/audit-events/verify?tenantId=` | `{valid, eventCount, headHash, firstBrokenLink: {eventId, sequence, reason}}`; reasons `sequence_gap`, `prev_hash_mismatch`, `hash_mismatch`                                |
 | `GET`  | `/v1/recordings/:id/lifecycle`      | lifecycle events whose `resourceId` or `metadata.recordingSessionId` equals `:id`, ordered by `occurredAt`                                                                  |
 
-Events without `tenantId` form a separate global chain.
+| `POST` | `/v1/content-reports` | `{reporterId, reporterRole, institutionId, resourceType, resourceId, classSectionId, reason, details?}` → `201`; an open report by the same reporter on the same resource → `200 {…, duplicate: true}` |
+| `GET` | `/v1/content-reports?classSectionId\|institutionId&status=open\|resolved` | newest first |
+| `GET` | `/v1/content-reports/:id` | |
+| `POST` | `/v1/content-reports/:id/resolve` | `{actorId, actorRole?=professor, resolution: corrected\|no_change_needed\|duplicate\|invalid, notes?}`; `409` if already resolved |
+
+Events without `tenantId` form a separate global chain. Content reports write audit `content.reported` /
+`content.report_resolved` and publish events of the same names through `EventPublisher`
+(`resourceId` may be composite, e.g. `<transcriptId>:<segmentIndex>`; it is kept in audit `metadata`).
 
 ## Storage
 

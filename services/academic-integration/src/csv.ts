@@ -4,7 +4,7 @@ import { DATE, TIME, type ImportPayloadInput } from './schemas.js';
 
 /** RFC 4180 CSV parser (quoted fields, escaped quotes, CRLF/LF). Auto-detects `;` or `,` delimiter. */
 export function parseCsv(text: string): string[][] {
-  const src = text.replace(/^﻿/, '');
+  const src = text.replace(/^\uFEFF/, '');
   const firstLine = src.split(/\r?\n/, 1)[0] ?? '';
   const delimiter =
     (firstLine.match(/;/g)?.length ?? 0) > (firstLine.match(/,/g)?.length ?? 0) ? ';' : ',';

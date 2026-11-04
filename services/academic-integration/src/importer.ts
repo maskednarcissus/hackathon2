@@ -30,9 +30,7 @@ export interface ImportPlan {
 const emptyCounts = (): EntityCounts => ({ created: 0, updated: 0, unchanged: 0 });
 
 function sameExceptId<T extends { id: string }>(a: T, b: T): boolean {
-  const { id: _a, ...ra } = a;
-  const { id: _b, ...rb } = b;
-  return JSON.stringify(ra) === JSON.stringify(rb);
+  return JSON.stringify({ ...a, id: null }) === JSON.stringify({ ...b, id: null });
 }
 
 /**
