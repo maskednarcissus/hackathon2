@@ -47,3 +47,9 @@ test-results/
 tests/audio-evaluation/recordings/
 tests/ai-evaluation/outputs/
 *.tsbuildinfo
+
+# MVP demo (generated)
+tests/demo/demo-stack.env
+tests/demo/demo-run.log
+tests/e2e/results/*.log
+tests/e2e/results/dev-stack.env

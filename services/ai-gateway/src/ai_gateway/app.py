@@ -64,6 +64,10 @@ def deps_from_env() -> GatewayDeps:
         embedder = VertexEmbeddingProvider()
     elif provider_name == "fake":
         provider = FakeProvider()
+    elif provider_name == "demo":
+        from ai_gateway.providers.demo import DemoProvider
+
+        provider = DemoProvider()
     else:
         raise ValueError(f"Unknown AI_GATEWAY_PROVIDER {provider_name!r}")
     default_budget = os.environ.get("AI_GATEWAY_DEFAULT_MONTHLY_BUDGET_USD")

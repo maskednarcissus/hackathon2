@@ -85,6 +85,9 @@ async function main(): Promise<void> {
     config: {
       ...DEFAULT_CONFIG,
       issuer: env['IDENTITY_ISSUER'] ?? DEFAULT_CONFIG.issuer,
+      accessTokenTtlSeconds: env['IDENTITY_ACCESS_TOKEN_TTL_SECONDS']
+        ? Number(env['IDENTITY_ACCESS_TOKEN_TTL_SECONDS'])
+        : DEFAULT_CONFIG.accessTokenTtlSeconds,
       internalToken,
     },
     institutions,

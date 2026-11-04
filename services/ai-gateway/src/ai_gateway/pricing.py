@@ -24,6 +24,7 @@ DEFAULT_PRICING: dict[str, ModelPrice] = {
     # Vertex bills embeddings per character; expressed here per token (~4 chars/token).
     "text-multilingual-embedding-002": ModelPrice(0.10, 0.0),
     "fake-model": ModelPrice(0.0, 0.0),
+    "demo-extractive": ModelPrice(0.0, 0.0),
     "fake-embedding": ModelPrice(0.0, 0.0),
 }
 

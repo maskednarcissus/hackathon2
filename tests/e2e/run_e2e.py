@@ -70,6 +70,11 @@ def load_env_file(path: Path) -> dict[str, str]:
     return env
 
 
+IS_WINDOWS = os.name == "nt"
+VENV_PYTHON = REPO / (".venv/Scripts/python.exe" if IS_WINDOWS else ".venv/bin/python")
+_SESSION_KW: dict[str, Any] = (
+    {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if IS_WINDOWS else {"start_new_session": True}
+)
 SHARED = load_env_file(REPO / "infrastructure/docker/full-stack.env")
 INTERNAL = SHARED["INTERNAL_API_TOKEN"]
 ADMIN = SHARED["ADMIN_API_TOKEN"]
@@ -290,12 +295,12 @@ class LocalStack:
             if svc.kind == "node":
                 cmd = ["node", "dist/index.js"]
             else:
-                py = REPO / ".venv/bin/python"
+                py = VENV_PYTHON
                 cmd = [str(py), "-m", "uvicorn", "main:app", "--app-dir", "src",
                        "--host", "127.0.0.1", "--port", str(svc.port)]
         env.update(extra or {})
         self.procs[name] = subprocess.Popen(
-            cmd, cwd=cwd, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True
+            cmd, cwd=cwd, env=env, stdout=log, stderr=subprocess.STDOUT, **_SESSION_KW
         )
 
     def wait_healthy(self, names: list[str], timeout: float = 90) -> None:
@@ -328,14 +333,20 @@ class LocalStack:
         for proc in self.procs.values():
             if proc.poll() is None:
                 try:
-                    os.killpg(proc.pid, signal.SIGTERM)
+                    if IS_WINDOWS:
+                        proc.terminate()
+                    else:
+                        os.killpg(proc.pid, signal.SIGTERM)
                 except ProcessLookupError:
                     pass
         for proc in self.procs.values():
             try:
                 proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
-                os.killpg(proc.pid, signal.SIGKILL)
+                if IS_WINDOWS:
+                    proc.kill()
+                else:
+                    os.killpg(proc.pid, signal.SIGKILL)
 
 
 def create_database(admin_url: str) -> str:
@@ -700,6 +711,39 @@ def run_scenario(urls: dict[str, str], stack: LocalStack | None, wav_seconds: in
         REPORT.steps[-1].detail = f"rows={len(rows)} captured={captured}"
 
 
+# ------------------------------------------------------------------------------------- dev server
+def serve_forever(stack: LocalStack) -> None:
+    """Keeps the seeded local stack up for the web apps (``--serve``) and writes their env file."""
+    ctx = REPORT.context
+    env_lines = [f"{v}={u}" for s in SERVICES for v in s.url_vars for u in [stack.urls()[s.name]]]
+    env_lines += [
+        f"INSTITUTION_ID={ctx.get('institutionId', '')}",
+        f"ADMIN_INSTITUTION_ID={ctx.get('institutionId', '')}",
+        f"PROFESSOR_ID={ctx.get('professorId', '')}",
+        f"ADMIN_API_TOKEN={ADMIN}",
+        f"DEVICE_MANAGEMENT_TOKEN={ADMIN}",
+    ]
+    out = RESULTS_DIR / "dev-stack.env"
+    RESULTS_DIR.mkdir(exist_ok=True)
+    out.write_text("\n".join(env_lines) + "\n", encoding="utf-8")
+    print("\n=== Local stack is up (Ctrl+C to stop) ===")
+    print(f"institutionId : {ctx.get('institutionId')}")
+    print("professor     : ana.lima@e2e.local / professora-e2e-123")
+    print("student       : aluno1@e2e.local / estudante-e2e-123")
+    print(f"env for apps  : {out}")
+    print(f"service logs  : {stack.workdir / 'logs'}", flush=True)
+    try:
+        while True:
+            time.sleep(5)
+            dead = [n for n, p in stack.procs.items() if p.poll() is not None]
+            if dead:
+                print(f"stopped unexpectedly: {', '.join(dead)}", flush=True)
+                for n in dead:
+                    stack.procs.pop(n)
+    except KeyboardInterrupt:
+        pass
+
+
 # -------------------------------------------------------------------------------------------- main
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -707,6 +751,8 @@ def main() -> int:
     ap.add_argument("--database", help="admin URL of a Postgres server (fresh DB is created; --local)")
     ap.add_argument("--wav-seconds", type=int, default=360, help="length of the synthetic recording")
     ap.add_argument("--keep", action="store_true", help="keep the work dir and logs")
+    ap.add_argument("--serve", action="store_true",
+                    help="--local: after seeding the scenario, keep every service running until Ctrl+C")
     args = ap.parse_args()
 
     stack: LocalStack | None = None
@@ -742,6 +788,8 @@ def main() -> int:
             run_scenario(urls, stack, args.wav_seconds)
         except StepFailed:
             pass
+        if args.serve and stack:
+            serve_forever(stack)
     except StepFailed:
         pass
     finally:
