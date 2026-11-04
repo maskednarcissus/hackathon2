@@ -214,12 +214,17 @@ export function buildApp(deps: AppDeps = {}): FastifyInstance {
       events.map(async (e) => {
         const { provenance, ...rest } = e;
         const history = (await repo.listChanges(e.id)).sort(byChangeOrder).map(toStudentVisible);
+        const section = await repo.getSection(e.classSectionId);
         return {
           ...rest,
+          courseName: section?.courseName ?? null,
           source: provenance
             ? {
                 recordingSessionId: provenance.recordingSessionId,
                 transcriptId: provenance.transcriptId,
+                ...(provenance.scheduledClassId !== undefined
+                  ? { scheduledClassId: provenance.scheduledClassId }
+                  : {}),
                 segmentIndex: provenance.segmentIndex,
                 startMs: provenance.startMs,
                 endMs: provenance.endMs,

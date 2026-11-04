@@ -17,6 +17,7 @@ const timezone = z.string().refine((tz) => {
 export const ProvenanceSchema = z.object({
   recordingSessionId: uuid,
   transcriptId: uuid,
+  scheduledClassId: uuid.optional(),
   segmentIndex: z.number().int().nonnegative(),
   startMs: z.number().int().nonnegative(),
   endMs: z.number().int().nonnegative(),

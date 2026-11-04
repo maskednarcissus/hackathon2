@@ -42,6 +42,7 @@ export type CalendarEventStatus = 'published' | 'cancelled';
 export interface Provenance {
   recordingSessionId: string;
   transcriptId: string;
+  scheduledClassId?: string | undefined;
   segmentIndex: number;
   startMs: number;
   endMs: number;

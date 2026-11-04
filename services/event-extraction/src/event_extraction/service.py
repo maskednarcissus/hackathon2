@@ -673,6 +673,7 @@ class EventExtractionService:
             "provenance": {
                 "recordingSessionId": ev.source.recording_session_id,
                 "transcriptId": ev.transcript_id,
+                "scheduledClassId": ev.scheduled_class_id,
                 "segmentIndex": ev.source.segment_index,
                 "startMs": ev.source.start_ms,
                 "endMs": ev.source.end_ms,
