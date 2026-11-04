@@ -76,6 +76,7 @@ def request_from_segmented(envelope: EventEnvelope) -> TranscriptionRequest:
         started_at=_parse_dt(data.get("startedAt")),
         ended_at=_parse_dt(data.get("endedAt")),
         discipline=data.get("discipline"),
+        language=data.get("language"),
         segments=[AudioSegmentRef.model_validate(s) for s in data.get("segments", [])],
     )
 

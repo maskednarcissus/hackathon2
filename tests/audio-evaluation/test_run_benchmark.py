@@ -172,3 +172,51 @@ def test_repository_manifest_loads_and_reports_missing_data(tmp_path: Path) -> N
     assert results["summary"]["cases"] >= 4
     # Audio corpora are not versioned; until transcripts are dropped in, cases are skipped.
     assert all(c["status"] in ("passed", "failed", "missing_data") for c in results["cases"])
+
+
+def test_language_aware_normalisation() -> None:
+    assert rb.canonical_language(None) == "pt-BR"
+    assert rb.canonical_language("es_MX") == "es-419"
+    assert rb.canonical_language("EN") == "en-US"
+    assert rb.canonical_language("fr-CA") == "fr-FR"
+    with pytest.raises(ValueError):
+        rb.canonical_language("de-DE")
+    assert (
+        rb.normalize_text("Pesquisa & Ensino: 50% da nota")
+        == "pesquisa e ensino 50 por cento da nota"
+    )
+    assert rb.normalize_text("Research & teaching: 50%", language="en-US") == (
+        "research and teaching 50 percent"
+    )
+    assert rb.normalize_text("¿Investigación & docencia? ¡Sí!", language="es-419") == (
+        "investigación y docencia sí"
+    )
+    assert rb.normalize_text("L’œuvre d'art & la thèse", language="fr-FR") == (
+        "l'oeuvre d'art et la thèse"
+    )
+    assert rb.normalize_text("don't stop", language="en-US") == "don't stop"
+    assert rb.normalize_text("euh donc euh", language="fr-FR", drop_fillers=True) == "donc"
+    assert rb.normalize_text("um so uh yes", language="en-US", drop_fillers=True) == "so yes"
+
+
+def test_wer_uses_case_language(tmp_path: Path) -> None:
+    data = tmp_path / "d"
+    data.mkdir()
+    (data / "ref.txt").write_text("Uh, the midterm is worth 30%.", encoding="utf-8")
+    (data / "hyp.txt").write_text("the midterm is worth 30 percent", encoding="utf-8")
+    manifest = {
+        "test_cases": [
+            {
+                "id": "en",
+                "language": "en-US",
+                "reference_path": "d/ref.txt",
+                "hypothesis_path": "d/hyp.txt",
+                "expected_wer_max": 0.0,
+            }
+        ]
+    }
+    path = tmp_path / "m.yaml"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    plain = rb.run(path)["cases"][0]
+    assert plain["language"] == "en-US" and plain["wer"] == pytest.approx(1 / 7, abs=1e-4)
+    assert rb.run(path, drop_fillers=True)["cases"][0]["status"] == "passed"

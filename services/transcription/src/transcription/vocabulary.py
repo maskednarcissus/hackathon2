@@ -10,6 +10,11 @@ Configuration file (JSON), path from ``TRANSCRIPTION_VOCABULARY_PATH``::
 
 Phrases for a job = default ∪ discipline ∪ institution["*"] ∪ institution[discipline],
 de-duplicated case-insensitively and capped at ``max_phrases`` (provider limit).
+
+Phase 6.4 — per-language sets: the top-level keys are the ``pt-BR`` catalog (backwards
+compatible); other languages live under ``"languages"`` with the same shape::
+
+    {"default": [...], "languages": {"en-US": {"default": [...], "disciplines": {...}}}}
 """
 
 from __future__ import annotations
@@ -19,6 +24,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from transcription.languages import DEFAULT_LANGUAGE, canonical_language
+
 
 @dataclass(frozen=True)
 class VocabularyCatalog:
@@ -26,6 +33,7 @@ class VocabularyCatalog:
     disciplines: dict[str, tuple[str, ...]] = field(default_factory=dict)
     institutions: dict[str, dict[str, tuple[str, ...]]] = field(default_factory=dict)
     max_phrases: int = 500
+    languages: dict[str, VocabularyCatalog] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any], max_phrases: int = 500) -> VocabularyCatalog:
@@ -42,6 +50,10 @@ class VocabularyCatalog:
                 for inst, sets in dict(raw.get("institutions", {})).items()
             },
             max_phrases=max_phrases,
+            languages={
+                canonical_language(code): cls.from_dict(dict(sub), max_phrases)
+                for code, sub in dict(raw.get("languages", {})).items()
+            },
         )
 
     @classmethod
@@ -51,7 +63,22 @@ class VocabularyCatalog:
         with open(path, encoding="utf-8") as fh:
             return cls.from_dict(json.load(fh))
 
-    def phrases_for(self, institution_id: str | None, discipline: str | None) -> tuple[str, ...]:
+    def phrases_for(
+        self, institution_id: str | None, discipline: str | None, language: str = "pt-BR"
+    ) -> tuple[str, ...]:
+        lang = canonical_language(language)
+        if lang != DEFAULT_LANGUAGE:
+            sub = self.languages.get(lang)
+            return sub.phrases_for(institution_id, discipline) if sub else ()
+        own = self._own_phrases(institution_id, discipline)
+        extra = self.languages.get(DEFAULT_LANGUAGE)
+        if extra is None:
+            return own
+        return merge_phrases(
+            own, extra.phrases_for(institution_id, discipline), max_phrases=self.max_phrases
+        )
+
+    def _own_phrases(self, institution_id: str | None, discipline: str | None) -> tuple[str, ...]:
         candidates: list[str] = list(self.default)
         if discipline:
             candidates += self.disciplines.get(discipline, ())
@@ -77,9 +104,9 @@ class StaticVocabularySource:
         self.catalog = catalog or VocabularyCatalog()
 
     async def phrases_for(
-        self, institution_id: str | None, discipline: str | None
+        self, institution_id: str | None, discipline: str | None, language: str = "pt-BR"
     ) -> tuple[tuple[str, ...], dict[str, float]]:
-        return self.catalog.phrases_for(institution_id, discipline), {}
+        return self.catalog.phrases_for(institution_id, discipline, language), {}
 
 
 def merge_phrases(*groups: tuple[str, ...] | list[str], max_phrases: int = 500) -> tuple[str, ...]:

@@ -13,9 +13,12 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validat
 from pydantic.alias_generators import to_camel
 
 from transcription.ids import check_uuid
+from transcription.languages import check_language
 
 #: Platform identifiers are UUID strings (contract §2); normalised to lowercase.
 UUIDStr = Annotated[str, AfterValidator(check_uuid)]
+#: Supported lecture language, canonicalised (``es_MX`` → ``es-419``) — Phase 6.4.
+LanguageStr = Annotated[str, AfterValidator(check_language)]
 
 
 class CamelModel(BaseModel):
@@ -50,7 +53,8 @@ class TranscriptionRequest(CamelModel):
     started_at: datetime | None = None
     ended_at: datetime | None = None
     discipline: str | None = Field(default=None, max_length=100)
-    language: str = "pt-BR"
+    #: Explicit lecture language; ``None`` → class context → ``pt-BR``.
+    language: LanguageStr | None = None
     segments: list[AudioSegmentRef] = Field(min_length=1)
 
     @model_validator(mode="after")

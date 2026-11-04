@@ -44,3 +44,23 @@ exit code is `1` if any evaluated case misses its thresholds (or, with `--requir
 if any case lacks data).
 
 Tests: `.venv/bin/pytest tests/audio-evaluation`.
+
+## Languages (Phase 6.4)
+
+Normalisation is language-aware (`language` per case, manifest `language`, or `--language`):
+spoken symbols (`&`, `%`, `+`, `=`) become the language's words, French ligatures are expanded,
+and `--drop-fillers` removes hesitations (`ahn`/`uh, um`/`eh`/`euh`…). Supported: `pt-BR`
+(default), `en-US`, `es-ES`, `es-419`, `fr-FR`.
+
+## Diarization DER (Phase 6.1)
+
+```bash
+.venv/bin/python tests/audio-evaluation/run_benchmark.py --diarization --systems v1,v2
+```
+
+`diarization/manifest.yaml` lists synthetic multi-speaker cases (rendered by
+`diarization/synthetic.py`, including overlapped speech) and slots for labelled real data
+(RTTM/JSON reference + WAV or hypothesis, under `diarization/corpus/`, gitignored). DER =
+(missed + false alarm + confusion) / reference speech on a 10 ms grid, overlap scored, optimal
+one-to-one speaker mapping, 250 ms collar by default (`--collar-ms`). Exit code 1 if a case
+exceeds its `expected_der_max` or v2 regresses against v1.

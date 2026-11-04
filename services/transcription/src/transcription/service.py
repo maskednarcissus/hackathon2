@@ -5,13 +5,19 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import structlog
 
 from transcription import PROCESSING_VERSION
 from transcription.assembly import GroupingConfig, assemble_transcript
+from transcription.languages import (
+    DEFAULT_LANGUAGE,
+    UnsupportedLanguageError,
+    canonical_language,
+    chirp_code,
+)
 from transcription.models import (
     AudioSegmentRef,
     JobStatus,
@@ -54,10 +60,23 @@ class ServiceSettings:
     max_concurrency: int = 4
     retry: RetryPolicy = RetryPolicy()
     grouping: GroupingConfig = GroupingConfig()
+    #: Per-deployment Chirp language-code overrides (``SPEECH_LANGUAGE_CODES``).
+    language_codes: dict[str, str] = field(default_factory=dict)
 
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _context_language(ctx: ClassContext) -> str | None:
+    """Class-context language if it is one we support; otherwise keep the default."""
+    if not ctx.language:
+        return None
+    try:
+        return canonical_language(ctx.language)
+    except UnsupportedLanguageError:
+        log.warning("transcription.unsupported_context_language", language=ctx.language)
+        return None
 
 
 class TranscriptionService:
@@ -136,11 +155,23 @@ class TranscriptionService:
                     attempt += 1
 
     async def _resolve_context(self, req: TranscriptionRequest) -> TranscriptionRequest:
-        """Fill classSectionId / institutionId / discipline from academic-integration.
+        """Fill classSectionId / institutionId / discipline / language from
+        academic-integration, then default the language to ``pt-BR`` (Phase 6.4).
 
         Best effort: a lookup failure never blocks transcription (the transcript is then
         stored without section association and can be re-associated later)."""
-        needs = req.class_section_id is None or req.institution_id is None or not req.discipline
+        resolved = await self._lookup_context(req)
+        if resolved.language is None:
+            resolved = resolved.model_copy(update={"language": DEFAULT_LANGUAGE})
+        return resolved
+
+    async def _lookup_context(self, req: TranscriptionRequest) -> TranscriptionRequest:
+        needs = (
+            req.class_section_id is None
+            or req.institution_id is None
+            or not req.discipline
+            or req.language is None
+        )
         if self._class_context is None or not needs:
             return req
         try:
@@ -162,6 +193,7 @@ class TranscriptionService:
                 "class_section_id": req.class_section_id or ctx.class_section_id,
                 "institution_id": req.institution_id or ctx.institution_id,
                 "discipline": req.discipline or ctx.discipline,
+                "language": req.language or _context_language(ctx),
             }
         )
 
@@ -194,20 +226,27 @@ class TranscriptionService:
         sem = asyncio.Semaphore(max(1, self._settings.max_concurrency))
         ordered = sorted(req.segments, key=lambda s: s.start_ms)
         try:
-            phrases, boosts = await self._vocabulary.phrases_for(req.institution_id, req.discipline)
-            config = RecognitionConfig(language=req.language, phrases=phrases, boosts=boosts)
+            language = req.language or DEFAULT_LANGUAGE
+            phrases, boosts = await self._vocabulary.phrases_for(
+                req.institution_id, req.discipline, language
+            )
+            config = RecognitionConfig(
+                language=chirp_code(language, self._settings.language_codes),
+                phrases=phrases,
+                boosts=boosts,
+            )
             results = await asyncio.gather(
                 *(self._transcribe_segment(seg, config, sem) for seg in ordered)
             )
             segments = assemble_transcript(
-                list(zip(ordered, results, strict=True)), req.language, self._settings.grouping
+                list(zip(ordered, results, strict=True)), language, self._settings.grouping
             )
             if not segments:
                 raise ProviderError("provider returned no speech for any segment")
             stored = await self._store.create_transcript(
                 recording_session_id=req.recording_session_id,
                 scheduled_class_id=req.scheduled_class_id,
-                language=req.language,
+                language=language,
                 processing_version=PROCESSING_VERSION,
                 provider=job.provider,
                 model=job.model,

@@ -34,7 +34,7 @@ def apply_migrations(url: str, own_pending: str) -> None:
             conn.execute(path.read_text(encoding="utf-8").encode())
         for path in sorted((MIGRATIONS / "pending").glob("*.sql")):
             sql = path.read_text(encoding="utf-8").encode()
-            if path.stem == own_pending:
+            if path.stem == own_pending or path.stem.startswith(f"{own_pending}-"):
                 conn.execute(sql)
                 continue
             try:

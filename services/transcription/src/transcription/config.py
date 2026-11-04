@@ -14,13 +14,15 @@
 | ``PUBSUB_PROJECT_ID`` | — | Google Pub/Sub publisher (if no ``EVENT_BUS_URL``) |
 | ``PUBSUB_TOPIC_TEMPLATE`` | ``{event}`` | Pub/Sub topic name template |
 | ``INTERNAL_API_TOKEN`` | — | required ``x-internal-token`` on event push routes; sent outbound |
-| ``TRANSCRIPTION_VOCABULARY_PATH`` | — | JSON phrase sets (see vocabulary.py) |
+| ``TRANSCRIPTION_VOCABULARY_PATH`` | ``config/vocabularies.json`` | JSON phrase sets per language |
+| ``SPEECH_LANGUAGE_CODES`` | — | JSON map platform language → Chirp code override |
 | ``TRANSCRIPTION_MAX_CONCURRENCY`` | ``4`` | parallel provider calls per job |
 """
 
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from transcription import PROCESSING_VERSION
 from transcription.adapters.http import (
@@ -39,6 +41,7 @@ from transcription.fakes import (
     InMemoryProcessedEvents,
     InMemoryTranscriptStore,
 )
+from transcription.languages import parse_overrides
 from transcription.ports import (
     AuditSink,
     ClassContextResolver,
@@ -52,6 +55,9 @@ from transcription.ports import (
 )
 from transcription.service import ServiceSettings, TranscriptionService
 from transcription.vocabulary import StaticVocabularySource, VocabularyCatalog
+
+#: Built-in per-language academic vocabulary shipped with the service.
+DEFAULT_VOCABULARY = Path(__file__).resolve().parents[2] / "config" / "vocabularies.json"
 
 
 def select_publisher(e: dict[str, str], token: str | None) -> EventPublisher:
@@ -78,7 +84,10 @@ def deps_from_env(env: dict[str, str] | None = None) -> AppDeps:
     else:
         provider = FakeSpeechProvider()
 
-    catalog = VocabularyCatalog.load(e.get("TRANSCRIPTION_VOCABULARY_PATH"))
+    vocab_path = e.get("TRANSCRIPTION_VOCABULARY_PATH") or (
+        str(DEFAULT_VOCABULARY) if DEFAULT_VOCABULARY.exists() else None
+    )
+    catalog = VocabularyCatalog.load(vocab_path)
     resources: list[Lifecycle] = []
     jobs: JobRepository
     vocabulary: VocabularySource
@@ -125,7 +134,10 @@ def deps_from_env(env: dict[str, str] | None = None) -> AppDeps:
         jobs=jobs,
         vocabulary=vocabulary,
         class_context=class_context,
-        settings=ServiceSettings(max_concurrency=int(e.get("TRANSCRIPTION_MAX_CONCURRENCY", "4"))),
+        settings=ServiceSettings(
+            max_concurrency=int(e.get("TRANSCRIPTION_MAX_CONCURRENCY", "4")),
+            language_codes=parse_overrides(e.get("SPEECH_LANGUAGE_CODES")),
+        ),
     )
     return AppDeps(
         service=service, processed_events=processed, internal_token=token, resources=resources

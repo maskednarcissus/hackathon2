@@ -6,7 +6,3 @@
 ALTER TABLE speaker_turns
     ADD COLUMN IF NOT EXISTS processing_version TEXT,
     ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
-
--- Turns of one transcript never share a start time (built from ordered, non-overlapping windows).
-CREATE UNIQUE INDEX IF NOT EXISTS uq_speaker_turns_transcript_start
-    ON speaker_turns (transcript_id, start_ms);

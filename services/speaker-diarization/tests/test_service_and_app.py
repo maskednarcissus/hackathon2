@@ -84,8 +84,8 @@ def test_provider_tags_are_mapped_without_audio() -> None:
     # Turns derived from labelled segments and persisted.
     turns = env.client.get(f"/v1/diarizations/{t}/turns").json()["turns"]
     assert turns == [
-        {"speakerLabel": "SPEAKER_1", "startMs": 0, "endMs": 1000},
-        {"speakerLabel": "SPEAKER_2", "startMs": 1000, "endMs": 3000},
+        {"speakerLabel": "SPEAKER_1", "startMs": 0, "endMs": 1000, "overlap": False},
+        {"speakerLabel": "SPEAKER_2", "startMs": 1000, "endMs": 3000, "overlap": False},
     ]
 
 
@@ -113,7 +113,7 @@ def test_inline_wav_acoustic_diarization() -> None:
     assert env.publisher.events == [
         {
             "type": "diarization.completed",
-            "data": {"transcriptId": t, "speakerCount": 2},
+            "data": {"transcriptId": t, "speakerCount": 2, "speakerCountEstimated": 2},
             "institutionId": INST,
         }
     ]

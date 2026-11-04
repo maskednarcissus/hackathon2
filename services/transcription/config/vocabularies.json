@@ -1,0 +1,40 @@
+{
+  "default": ["ementa", "plano de ensino", "avaliação", "prova", "trabalho final", "seminário", "monografia", "TCC", "bibliografia"],
+  "disciplines": {
+    "medicine": ["anamnese", "farmacocinética", "farmacodinâmica", "posologia", "hipertensão arterial"],
+    "law": ["habeas corpus", "mandado de segurança", "jurisprudência", "Supremo Tribunal Federal", "vade mecum"],
+    "engineering": ["momento fletor", "tensão de cisalhamento", "módulo de elasticidade"],
+    "economics": ["elasticidade-preço", "custo marginal", "taxa Selic", "produto interno bruto"]
+  },
+  "languages": {
+    "en-US": {
+      "default": ["syllabus", "midterm", "final exam", "assignment", "problem set", "office hours", "term paper", "rubric"],
+      "disciplines": {
+        "medicine": ["pharmacokinetics", "anamnesis", "differential diagnosis"],
+        "law": ["habeas corpus", "case law", "due process"],
+        "economics": ["marginal cost", "price elasticity", "gross domestic product"]
+      }
+    },
+    "es-ES": {
+      "default": ["temario", "examen parcial", "examen final", "trabajo práctico", "evaluación continua", "tutorías", "bibliografía"],
+      "disciplines": {
+        "medicine": ["anamnesis", "farmacocinética", "posología"],
+        "law": ["jurisprudencia", "recurso de amparo", "habeas corpus"]
+      }
+    },
+    "es-419": {
+      "default": ["programa del curso", "examen parcial", "examen final", "trabajo práctico", "entrega", "consultas", "bibliografía"],
+      "disciplines": {
+        "medicine": ["anamnesis", "farmacocinética", "posología"],
+        "law": ["jurisprudencia", "acción de amparo", "habeas corpus"]
+      }
+    },
+    "fr-FR": {
+      "default": ["plan de cours", "partiel", "examen final", "devoir maison", "contrôle continu", "travaux dirigés", "bibliographie"],
+      "disciplines": {
+        "medicine": ["anamnèse", "pharmacocinétique", "posologie"],
+        "law": ["jurisprudence", "Conseil constitutionnel", "habeas corpus"]
+      }
+    }
+  }
+}

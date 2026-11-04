@@ -212,11 +212,14 @@ class HttpClassContextResolver(_HttpBase):
 
 def _context_from_scheduled_class(sc: dict[str, Any]) -> ClassContext:
     course = sc.get("course") or {}
+    section = sc.get("classSection") or {}
     return ClassContext(
         scheduled_class_id=sc.get("id"),
         class_section_id=sc.get("classSectionId"),
         institution_id=sc.get("institutionId"),
         discipline=course.get("discipline"),
+        # Phase 6.4: section language overrides the course's; either may be absent.
+        language=sc.get("language") or section.get("language") or course.get("language"),
     )
 
 

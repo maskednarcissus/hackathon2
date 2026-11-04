@@ -1,6 +1,6 @@
 """PostgreSQL adapters (psycopg 3 + psycopg_pool), selected when ``DATABASE_URL`` is set.
 
-Tables: ``speaker_turns`` (V002 + pending/speaker-diarization.sql, owned here) and
+Tables: ``speaker_turns`` (V002 + pending/speaker-diarization{,-phase6}.sql, owned here) and
 ``processed_events``. No DDL at runtime.
 """
 
@@ -53,8 +53,9 @@ class PostgresTurnRepository:
                     await cur.executemany(
                         """
                         INSERT INTO speaker_turns
-                            (transcript_id, speaker_label, start_ms, end_ms, processing_version)
-                        VALUES (%s, %s, %s, %s, %s)
+                            (transcript_id, speaker_label, start_ms, end_ms, processing_version,
+                             overlap, confidence)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
                         """,
                         [
                             (
@@ -63,6 +64,8 @@ class PostgresTurnRepository:
                                 t.start_ms,
                                 t.end_ms,
                                 processing_version,
+                                t.overlap,
+                                t.confidence,
                             )
                             for t in turns
                         ],
@@ -75,14 +78,20 @@ class PostgresTurnRepository:
             cur = conn.cursor(row_factory=dict_row)
             await cur.execute(
                 """
-                SELECT speaker_label, start_ms, end_ms FROM speaker_turns
-                WHERE transcript_id = %s ORDER BY start_ms, end_ms
+                SELECT speaker_label, start_ms, end_ms, overlap, confidence FROM speaker_turns
+                WHERE transcript_id = %s ORDER BY start_ms, overlap, speaker_label
                 """,
                 (transcript_id,),
             )
             rows = await cur.fetchall()
         return [
-            TurnOut(speaker_label=r["speaker_label"], start_ms=r["start_ms"], end_ms=r["end_ms"])
+            TurnOut(
+                speaker_label=r["speaker_label"],
+                start_ms=r["start_ms"],
+                end_ms=r["end_ms"],
+                overlap=r["overlap"],
+                confidence=float(r["confidence"]) if r["confidence"] is not None else None,
+            )
             for r in rows
         ]
 

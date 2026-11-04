@@ -108,9 +108,9 @@ class JobRepository(Protocol):
 
 class VocabularySource(Protocol):
     async def phrases_for(
-        self, institution_id: str | None, discipline: str | None
+        self, institution_id: str | None, discipline: str | None, language: str = "pt-BR"
     ) -> tuple[tuple[str, ...], dict[str, float]]:
-        """Phrases for a job and per-phrase boost overrides."""
+        """Phrases for a job (in its language) and per-phrase boost overrides."""
         ...
 
 
@@ -120,6 +120,7 @@ class ClassContext:
     class_section_id: str | None = None
     institution_id: str | None = None
     discipline: str | None = None
+    language: str | None = None
 
 
 class ClassContextResolver(Protocol):

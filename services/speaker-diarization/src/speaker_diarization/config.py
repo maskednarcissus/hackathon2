@@ -11,8 +11,11 @@
 | ``INTERNAL_API_TOKEN`` | — | ``x-internal-token`` required on the event route; sent outbound |
 | ``AUDIO_GCS_ENABLED`` | ``false`` | enable ``gs://`` loader (needs ``[gcp]`` extra) |
 | ``AUDIO_LOCAL_ROOT`` | — | confine ``file://`` reads to this directory |
-| ``DIARIZATION_DISTANCE_THRESHOLD`` | ``0.30`` | clustering stop distance |
-| ``DIARIZATION_MAX_SPEAKERS`` | ``8`` | upper bound on speakers |
+| ``DIARIZATION_ENGINE`` | ``v2`` | ``v2`` (Phase 6.1) or ``v1`` (Phase 1, rollback) |
+| ``DIARIZATION_DISTANCE_THRESHOLD`` | ``0.30`` | v1 clustering stop distance |
+| ``DIARIZATION_MAX_SPEAKERS`` | ``8`` | upper bound on speakers (v2 caps at 8) |
+| ``DIARIZATION_MIN_TURN_S`` | ``1.0`` | v2 HMM minimum turn duration |
+| ``DIARIZATION_CHUNK_S`` | ``300`` | v2 chunk length for single long files |
 """
 
 from __future__ import annotations
@@ -40,6 +43,7 @@ from speaker_diarization.audio import (
     RoutingAudioLoader,
 )
 from speaker_diarization.engine import EngineConfig
+from speaker_diarization.engine_v2 import V2Config
 from speaker_diarization.ports import (
     AuditSink,
     EventPublisher,
@@ -106,6 +110,12 @@ def deps_from_env(env: dict[str, str] | None = None) -> AppDeps:
         audit=audit,
         engine=engine,
         turns=turns,
+        engine_version=e.get("DIARIZATION_ENGINE", "v2"),
+        engine_v2=V2Config(
+            max_speakers=min(8, int(e.get("DIARIZATION_MAX_SPEAKERS", "8"))),
+            min_turn_s=float(e.get("DIARIZATION_MIN_TURN_S", "1.0")),
+            chunk_s=float(e.get("DIARIZATION_CHUNK_S", "300")),
+        ),
     )
     return AppDeps(
         service=service, processed_events=processed, internal_token=token, resources=resources

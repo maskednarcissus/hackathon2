@@ -69,12 +69,19 @@ class TurnOut(CamelModel):
     speaker_label: str
     start_ms: int
     end_ms: int
+    #: True when another voice speaks at the same time (v2).
+    overlap: bool = False
+    #: Mean posterior of the assigned speaker over the turn (v2), 0–1.
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class DiarizationResult(CamelModel):
     transcript_id: str
-    method: str  # "provider_tags" | "acoustic"
+    method: str  # "provider_tags" | "acoustic_clustering"
+    #: Distinct labels assigned to transcript segments (what transcript-management stores).
     speaker_count: int
+    #: v2 eigengap/linking estimate of voices in the audio (``speakerCount.estimated``).
+    speaker_count_estimated: int | None = None
     assignments: list[SpeakerAssignment]
     turns: list[TurnOut]
     processing_version: str

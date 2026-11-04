@@ -33,6 +33,8 @@ from typing import Any
 import numpy as np
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 # --------------------------------------------------------------------------- normalisation
 
 
@@ -43,14 +45,76 @@ def _strip_accents(text: str) -> str:
     )
 
 
-def normalize_text(text: str, accent_insensitive: bool = False) -> str:
-    """Normalise Brazilian Portuguese text for scoring.
+#: Phase 6.4 languages (``pt-BR`` default). Aliases resolve like the transcription service.
+SUPPORTED_LANGUAGES = ("pt-BR", "en-US", "es-ES", "es-419", "fr-FR")
+_LANGUAGE_ALIASES = {
+    "pt": "pt-BR",
+    "pt-br": "pt-BR",
+    "pt-pt": "pt-BR",
+    "en": "en-US",
+    "en-us": "en-US",
+    "en-gb": "en-US",
+    "es": "es-ES",
+    "es-es": "es-ES",
+    "es-419": "es-419",
+    "fr": "fr-FR",
+    "fr-fr": "fr-FR",
+    "fr-ca": "fr-FR",
+}
+_LATAM_SPANISH = {"mx", "ar", "co", "cl", "pe", "ve", "uy", "py", "bo", "ec", "cr", "gt", "us"}
 
-    NFKC → casefold → punctuation/symbols become spaces (hyphens and apostrophes between
-    letters/digits are kept: ``guarda-chuva``, ``d'água``) → whitespace collapsed.
-    Digits are kept as written (no number verbalisation).
+#: Symbols spoken as words, per language (applied before punctuation removal).
+_SYMBOL_WORDS = {
+    "pt": {"&": " e ", "%": " por cento ", "+": " mais ", "=": " igual "},
+    "en": {"&": " and ", "%": " percent ", "+": " plus ", "=": " equals "},
+    "es": {"&": " y ", "%": " por ciento ", "+": " más ", "=": " igual "},
+    "fr": {"&": " et ", "%": " pour cent ", "+": " plus ", "=": " égal "},
+}
+#: Hesitation fillers removed with ``drop_fillers`` (never content words).
+_FILLERS = {
+    "pt": {"ahn", "hã", "hum", "humm", "éé", "ééé", "uhum"},
+    "en": {"uh", "um", "uhm", "er", "erm", "hmm", "mm"},
+    "es": {"eh", "ehm", "em", "mmm", "este…"},
+    "fr": {"euh", "heu", "hum", "bah", "mmh"},
+}
+#: Ligatures NFKC keeps (French orthography) → scoring form.
+_LIGATURES = {"fr": {"œ": "oe", "æ": "ae"}}
+
+
+def canonical_language(code: str | None) -> str:
+    """Normalise a language tag to one of ``SUPPORTED_LANGUAGES`` (default ``pt-BR``)."""
+    if not code:
+        return "pt-BR"
+    key = code.strip().replace("_", "-").lower()
+    if key in _LANGUAGE_ALIASES:
+        return _LANGUAGE_ALIASES[key]
+    base, _, region = key.partition("-")
+    if base == "es" and (region in _LATAM_SPANISH or region.isdigit()):
+        return "es-419"
+    if base in ("pt", "en", "es", "fr"):
+        return _LANGUAGE_ALIASES[base]
+    raise ValueError(f"unsupported language {code!r}; expected one of {SUPPORTED_LANGUAGES}")
+
+
+def normalize_text(
+    text: str,
+    accent_insensitive: bool = False,
+    language: str = "pt-BR",
+    drop_fillers: bool = False,
+) -> str:
+    """Language-aware normalisation for scoring (Phase 6.4).
+
+    NFKC → casefold → language ligatures (fr ``œ``→``oe``) → spoken symbols (``&``, ``%``,
+    ``+``, ``=`` → the language's words) → punctuation/symbols become spaces (hyphens and
+    apostrophes between letters/digits are kept: ``guarda-chuva``, ``d'água``, ``l'école``,
+    ``don't``) → optional filler removal → whitespace collapsed. Digits are kept as written.
     """
+    base = canonical_language(language).split("-")[0]
     text = unicodedata.normalize("NFKC", text).casefold()
+    for lig, repl in _LIGATURES.get(base, {}).items():
+        text = text.replace(lig, repl)
+    for sym, words in _SYMBOL_WORDS[base].items():
+        text = text.replace(sym, words)
     if accent_insensitive:
         text = _strip_accents(text)
     out: list[str] = []
@@ -66,7 +130,11 @@ def normalize_text(text: str, accent_insensitive: bool = False) -> str:
                 out.append(" ")
         else:
             out.append(ch)
-    return " ".join("".join(out).split())
+    tokens = "".join(out).split()
+    if drop_fillers:
+        fillers = _FILLERS[base]
+        tokens = [t for t in tokens if t not in fillers]
+    return " ".join(tokens)
 
 
 # --------------------------------------------------------------------------- edit distance
@@ -93,17 +161,29 @@ def edit_distance(reference: list[Any], hypothesis: list[Any]) -> int:
     return int(prev[-1])
 
 
-def compute_wer(reference: str, hypothesis: str, accent_insensitive: bool = False) -> float:
-    ref = normalize_text(reference, accent_insensitive).split()
-    hyp = normalize_text(hypothesis, accent_insensitive).split()
+def compute_wer(
+    reference: str,
+    hypothesis: str,
+    accent_insensitive: bool = False,
+    language: str = "pt-BR",
+    drop_fillers: bool = False,
+) -> float:
+    ref = normalize_text(reference, accent_insensitive, language, drop_fillers).split()
+    hyp = normalize_text(hypothesis, accent_insensitive, language, drop_fillers).split()
     if not ref:
         return 0.0 if not hyp else 1.0
     return edit_distance(ref, hyp) / len(ref)
 
 
-def compute_cer(reference: str, hypothesis: str, accent_insensitive: bool = False) -> float:
-    ref = list(normalize_text(reference, accent_insensitive))
-    hyp = list(normalize_text(hypothesis, accent_insensitive))
+def compute_cer(
+    reference: str,
+    hypothesis: str,
+    accent_insensitive: bool = False,
+    language: str = "pt-BR",
+    drop_fillers: bool = False,
+) -> float:
+    ref = list(normalize_text(reference, accent_insensitive, language, drop_fillers))
+    hyp = list(normalize_text(hypothesis, accent_insensitive, language, drop_fillers))
     if not ref:
         return 0.0 if not hyp else 1.0
     return edit_distance(ref, hyp) / len(ref)
@@ -117,15 +197,19 @@ def _count_phrase(tokens: list[str], phrase: list[str]) -> int:
 
 
 def terminology_accuracy(
-    reference: str, hypothesis: str, terms: list[str], accent_insensitive: bool = False
+    reference: str,
+    hypothesis: str,
+    terms: list[str],
+    accent_insensitive: bool = False,
+    language: str = "pt-BR",
 ) -> float | None:
     """Share of domain-term occurrences in the reference also produced in the hypothesis
     (``Σ min(hyp, ref) / Σ ref``). ``None`` when no listed term occurs in the reference."""
-    ref = normalize_text(reference, accent_insensitive).split()
-    hyp = normalize_text(hypothesis, accent_insensitive).split()
+    ref = normalize_text(reference, accent_insensitive, language).split()
+    hyp = normalize_text(hypothesis, accent_insensitive, language).split()
     found = expected = 0
     for term in terms:
-        phrase = normalize_text(term, accent_insensitive).split()
+        phrase = normalize_text(term, accent_insensitive, language).split()
         r = _count_phrase(ref, phrase)
         if r:
             expected += r
@@ -162,6 +246,7 @@ class CaseResult:
     status: str  # passed | failed | missing_data
     discipline: str | None = None
     acoustic_condition: str | None = None
+    language: str = "pt-BR"
     reference_words: int | None = None
     hypothesis_words: int | None = None
     wer: float | None = None
@@ -190,6 +275,8 @@ def evaluate_case(
     base: Path,
     hypothesis_dir: Path | None = None,
     accent_insensitive: bool = False,
+    drop_fillers: bool = False,
+    default_language: str = "pt-BR",
 ) -> CaseResult:
     thresholds = {
         k: float(case[k])
@@ -201,8 +288,10 @@ def evaluate_case(
         status="missing_data",
         discipline=case.get("discipline"),
         acoustic_condition=case.get("acoustic_condition"),
+        language=canonical_language(case.get("language") or default_language),
         thresholds=thresholds,
     )
+    lang = result.language
     ref_path = base / str(case["reference_path"]) if case.get("reference_path") else None
     hyp_path = _resolve_hypothesis(case, base, hypothesis_dir)
     for label, path in (("reference", ref_path), ("hypothesis", hyp_path)):
@@ -215,12 +304,13 @@ def evaluate_case(
 
     reference = load_transcript_text(ref_path)
     hypothesis = load_transcript_text(hyp_path)
-    result.reference_words = len(normalize_text(reference, accent_insensitive).split())
-    result.hypothesis_words = len(normalize_text(hypothesis, accent_insensitive).split())
-    result.wer = round(compute_wer(reference, hypothesis, accent_insensitive), 4)
-    result.cer = round(compute_cer(reference, hypothesis, accent_insensitive), 4)
+    opts = (accent_insensitive, lang, drop_fillers)
+    result.reference_words = len(normalize_text(reference, *opts).split())
+    result.hypothesis_words = len(normalize_text(hypothesis, *opts).split())
+    result.wer = round(compute_wer(reference, hypothesis, *opts), 4)
+    result.cer = round(compute_cer(reference, hypothesis, *opts), 4)
     terms = [str(t) for t in case.get("terms", [])]
-    term_acc = terminology_accuracy(reference, hypothesis, terms, accent_insensitive)
+    term_acc = terminology_accuracy(reference, hypothesis, terms, accent_insensitive, lang)
     result.terminology_accuracy = None if term_acc is None else round(term_acc, 4)
 
     if "expected_wer_max" in thresholds and result.wer > thresholds["expected_wer_max"]:
@@ -243,13 +333,16 @@ def run(
     manifest_path: str | Path,
     hypothesis_dir: str | Path | None = None,
     accent_insensitive: bool = False,
+    drop_fillers: bool = False,
+    language: str | None = None,
 ) -> dict[str, Any]:
     manifest_path = Path(manifest_path)
     manifest = load_manifest(manifest_path)
     base = manifest_path.resolve().parent
     hyp_dir = Path(hypothesis_dir).resolve() if hypothesis_dir else None
+    default_language = canonical_language(language or manifest.get("language"))
     cases = [
-        evaluate_case(case, base, hyp_dir, accent_insensitive)
+        evaluate_case(case, base, hyp_dir, accent_insensitive, drop_fillers, default_language)
         for case in manifest.get("test_cases", [])
     ]
     evaluated = [c for c in cases if c.status != "missing_data"]
@@ -264,6 +357,8 @@ def run(
         "manifestVersion": manifest.get("version"),
         "generatedAt": datetime.now(UTC).isoformat(),
         "accentInsensitive": accent_insensitive,
+        "dropFillers": drop_fillers,
+        "languages": sorted({c.language for c in cases}),
         "summary": {
             "cases": len(cases),
             "evaluated": len(evaluated),
@@ -307,18 +402,61 @@ def render_markdown(results: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _diarization_main(args: argparse.Namespace) -> int:
+    import diarization_benchmark as dz
+
+    systems = [s.strip() for s in args.systems.split(",") if s.strip()]
+    results = dz.evaluate(Path(args.diarization_manifest), systems, args.collar_ms)
+    out = Path(args.output)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "diarization-results.json").write_text(
+        json.dumps(results, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    report = dz.render_markdown(results, systems)
+    s = results["summary"]
+    regression = False
+    if "v1" in s and "v2" in s and s["v1"]["der"] is not None and s["v2"]["der"] is not None:
+        delta = s["v1"]["der"] - s["v2"]["der"]
+        regression = delta < 0
+        report += f"\nv2 vs v1 pooled DER: {delta:+.2%} absolute improvement\n"
+    (out / "diarization-report.md").write_text(report, encoding="utf-8")
+    print(report)
+    if s["failed"] or regression or (args.require_data and s["missingData"]):
+        return 1
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Transcription Benchmark")
+    parser = argparse.ArgumentParser(description="Transcription / diarization benchmark")
     parser.add_argument("--manifest", default="tests/audio-evaluation/benchmark-manifest.yaml")
     parser.add_argument("--output", default="tests/audio-evaluation/results")
     parser.add_argument("--hypothesis-dir", default=None)
     parser.add_argument("--accent-insensitive", action="store_true")
+    parser.add_argument("--drop-fillers", action="store_true", help="remove hesitation fillers")
+    parser.add_argument("--language", default=None, help="default language for cases")
     parser.add_argument(
         "--require-data", action="store_true", help="treat missing data as a failure"
     )
+    parser.add_argument(
+        "--diarization", action="store_true", help="run the DER benchmark (Phase 6.1)"
+    )
+    parser.add_argument(
+        "--diarization-manifest",
+        default=str(Path(__file__).resolve().parent / "diarization" / "manifest.yaml"),
+    )
+    parser.add_argument("--systems", default="v1,v2", help="diarization engines to compare")
+    parser.add_argument("--collar-ms", type=int, default=250)
     args = parser.parse_args(argv)
+    if args.diarization:
+        return _diarization_main(args)
 
-    results = run(args.manifest, args.hypothesis_dir, args.accent_insensitive)
+    results = run(
+        args.manifest,
+        args.hypothesis_dir,
+        args.accent_insensitive,
+        args.drop_fillers,
+        args.language,
+    )
     out = Path(args.output)
     out.mkdir(parents=True, exist_ok=True)
     (out / "results.json").write_text(

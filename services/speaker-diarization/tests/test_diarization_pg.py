@@ -95,6 +95,29 @@ async def test_turns_replace_and_list(
     assert await repo.list(t) == first  # failed replacement rolled back
 
 
+async def test_overlap_turns_and_confidence_persist(
+    pool: AsyncConnectionPool, db_url: str, ids: dict[str, str]
+) -> None:
+    repo = PostgresTurnRepository(pool)
+    t = new_transcript(db_url, ids)
+    turns = [
+        TurnOut(speaker_label="SPEAKER_1", start_ms=0, end_ms=6_000, overlap=True, confidence=0.97),
+        # Second voice starting at the same instant (allowed: uniqueness is per speaker).
+        TurnOut(speaker_label="SPEAKER_2", start_ms=0, end_ms=2_000, overlap=True, confidence=0.41),
+        TurnOut(speaker_label="SPEAKER_2", start_ms=6_000, end_ms=9_000, confidence=0.99),
+    ]
+    await repo.replace(t, turns, PROCESSING_VERSION)
+    stored = await repo.list(t)
+    assert sorted(stored, key=lambda x: (x.start_ms, x.speaker_label)) == turns
+    with pytest.raises(psycopg.errors.CheckViolation):
+        with psycopg.connect(db_url, autocommit=True) as conn:
+            conn.execute(
+                "INSERT INTO speaker_turns (transcript_id, speaker_label, start_ms, end_ms,"
+                " confidence) VALUES (%s, 'SPEAKER_3', 0, 10, 1.5)",
+                (t,),
+            )
+
+
 async def test_processed_events(pool: AsyncConnectionPool) -> None:
     events = PostgresProcessedEvents(pool)
     eid = str(uuid.uuid4())

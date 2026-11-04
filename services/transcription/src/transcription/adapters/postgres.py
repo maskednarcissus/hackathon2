@@ -1,6 +1,6 @@
 """PostgreSQL adapters (psycopg 3 + psycopg_pool), selected when ``DATABASE_URL`` is set.
 
-Tables (V002 + pending/transcription.sql): ``transcription_jobs`` (partial unique index
+Tables (V002 + pending/transcription{,-phase6}.sql): ``transcription_jobs`` (partial unique index
 ``uq_transcription_jobs_active``), ``transcription_vocabularies``, ``processed_events``.
 The service never runs DDL.
 """
@@ -15,6 +15,7 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
 from transcription.ids import is_uuid
+from transcription.languages import DEFAULT_LANGUAGE, canonical_language
 from transcription.models import JobStatus, TranscriptionJob, TranscriptionRequest
 from transcription.vocabulary import VocabularyCatalog, merge_phrases
 
@@ -91,8 +92,8 @@ class PostgresJobRepository:
                 f"""
                 INSERT INTO transcription_jobs
                     (id, recording_session_id, status, provider, model, processing_version,
-                     request, created_at)
-                VALUES (%s, %s, 'queued', %s, %s, %s, %s, %s)
+                     request, created_at, language)
+                VALUES (%s, %s, 'queued', %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (recording_session_id) WHERE {_ACTIVE_PREDICATE} DO NOTHING
                 RETURNING {_JOB_COLUMNS}
                 """,
@@ -104,6 +105,7 @@ class PostgresJobRepository:
                     self._processing_version,
                     Jsonb(req.dump()),
                     job.created_at,
+                    req.language,
                 ),
             )
             if inserted is not None:
@@ -139,6 +141,7 @@ class PostgresJobRepository:
                     word_count = %s,
                     mean_confidence = %s,
                     failure_reason = %s,
+                    language = %s,
                     started_at = CASE WHEN %s::text <> 'queued'
                                       THEN COALESCE(started_at, NOW()) END,
                     finished_at = CASE WHEN %s THEN COALESCE(finished_at, %s) END
@@ -152,6 +155,7 @@ class PostgresJobRepository:
                     job.word_count,
                     job.mean_confidence,
                     job.failure_reason,
+                    job.request.language or DEFAULT_LANGUAGE,
                     job.status.value,
                     finished,
                     job.updated_at.astimezone(UTC),
@@ -192,9 +196,10 @@ class PostgresVocabularySource:
         self._base = base or VocabularyCatalog()
 
     async def phrases_for(
-        self, institution_id: str | None, discipline: str | None
+        self, institution_id: str | None, discipline: str | None, language: str = "pt-BR"
     ) -> tuple[tuple[str, ...], dict[str, float]]:
         inst = institution_id if institution_id and is_uuid(institution_id) else None
+        lang = canonical_language(language)
         async with self._pool.connection() as conn:
             cur = conn.cursor(row_factory=dict_row)
             await cur.execute(
@@ -202,9 +207,10 @@ class PostgresVocabularySource:
                 SELECT phrases, boost FROM transcription_vocabularies
                 WHERE (institution_id IS NULL OR institution_id = %s)
                   AND (discipline IS NULL OR discipline = %s)
+                  AND language = %s
                 ORDER BY (institution_id IS NOT NULL), (discipline IS NOT NULL), created_at
                 """,
-                (inst, discipline),
+                (inst, discipline, lang),
             )
             rows = await cur.fetchall()
         boosts: dict[str, float] = {}
@@ -214,7 +220,7 @@ class PostgresVocabularySource:
                 db_phrases.append(phrase)
                 boosts[phrase.strip()] = float(row["boost"])
         phrases = merge_phrases(
-            self._base.phrases_for(institution_id, discipline),
+            self._base.phrases_for(institution_id, discipline, lang),
             db_phrases,
             max_phrases=self._base.max_phrases,
         )

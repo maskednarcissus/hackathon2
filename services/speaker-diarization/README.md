@@ -39,6 +39,16 @@ ruff check . && ruff format --check . && mypy src/ && pytest
 uvicorn main:app --app-dir src --port 8004
 ```
 
+## Diarization v2 (Phase 6.1, default — `DIARIZATION_ENGINE=v2`)
+
+`src/speaker_diarization/engine_v2.py`: per-chunk spectral clustering (auto p-pruning, eigengap
+speaker count, cap 8) with merge/bisect refinement; mixture clusters → overlap of a speaker pair;
+cross-chunk linking (average linkage with cannot-link); duration-constrained Viterbi
+re-segmentation (`DIARIZATION_MIN_TURN_S`); overlap turns (`turns[].overlap`) and per-turn
+confidence (`turns[].confidence`); `speakerCountEstimated` in the response and event. v1 stays
+available (`DIARIZATION_ENGINE=v1`) for rollback; processing versions `diarization-2.0.0` /
+`diarization-1.0.0`. DER: `run_benchmark.py --diarization` (see `tests/audio-evaluation/README.md`).
+
 ## Integration (Postgres, event bus, security)
 
 * `DATABASE_URL` → `adapters/postgres.py`: `speaker_turns` replaced atomically per transcript

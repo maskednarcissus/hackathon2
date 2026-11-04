@@ -43,6 +43,15 @@ ruff check . && ruff format --check . && mypy src/ && pytest
 uvicorn main:app --app-dir src --port 8003
 ```
 
+## Languages (Phase 6.4)
+
+`pt-BR` (default), `en-US`, `es-ES`, `es-419`, `fr-FR` (`src/transcription/languages.py`; aliases
+such as `es_MX` → `es-419`). Resolution: `recording.segmented` / request `language` → class
+context (`language` of the scheduled class, section or course) → `pt-BR`. The language selects
+the Chirp code (overridable with `SPEECH_LANGUAGE_CODES`) and the vocabulary
+(`config/vocabularies.json` → `"languages"`, and `transcription_vocabularies.language`). The
+transcript and `transcription.completed` carry the effective language.
+
 ## Integration (Postgres, event bus, security)
 
 * `DATABASE_URL` → `adapters/postgres.py`: `transcription_jobs` (create-if-absent on the partial

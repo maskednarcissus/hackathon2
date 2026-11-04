@@ -1,0 +1,118 @@
+# Classroom Intelligence — Diarization benchmark (Phase 6.1)
+#
+# Synthetic cases are rendered on the fly (diarization/synthetic.py, deterministic seeds).
+# Labelled real recordings may be added with reference_path (RTTM or JSON turns) plus either
+# audio_path (diarized by each system) or hypothesis_path (scored as-is). Real audio and
+# references are NOT versioned (LGPD) — put them under diarization/corpus/ (gitignored).
+#
+#   .venv/bin/python tests/audio-evaluation/run_benchmark.py --diarization --systems v1,v2
+version: "1.0"
+
+cases:
+  - id: syn-two-speakers-alternating
+    description: Professor and one student alternating, long turns
+    expected_der_max: 0.10
+    synthetic:
+      seed: 1
+      script:
+        - { speaker: A, seconds: 14 }
+        - { speaker: B, seconds: 8 }
+        - { speaker: A, seconds: 12 }
+        - { speaker: B, seconds: 6 }
+        - { speaker: A, seconds: 10 }
+
+  - id: syn-lecture-short-questions
+    description: Long professor turns with short student questions (2–3 s) from three students
+    expected_der_max: 0.15
+    synthetic:
+      seed: 2
+      script:
+        - { speaker: A, seconds: 20 }
+        - { speaker: B, seconds: 2.5 }
+        - { speaker: A, seconds: 15 }
+        - { speaker: C, seconds: 3 }
+        - { speaker: A, seconds: 12 }
+        - { speaker: D, seconds: 2.5 }
+        - { speaker: A, seconds: 15 }
+        - { speaker: B, seconds: 3 }
+        - { speaker: A, seconds: 10 }
+
+  - id: syn-three-speakers-overlaps
+    description: Discussion with overlapping speech (A+B, B+C) between turns
+    expected_der_max: 0.20
+    synthetic:
+      seed: 3
+      gap_s: 0.2
+      script:
+        - { speaker: A, seconds: 10 }
+        - { speakers: [A, B], seconds: 2.5 }
+        - { speaker: B, seconds: 9 }
+        - { speakers: [B, C], seconds: 2.5 }
+        - { speaker: C, seconds: 9 }
+        - { speaker: A, seconds: 8 }
+        - { speakers: [A, C], seconds: 2 }
+        - { speaker: C, seconds: 7 }
+
+  - id: syn-five-speakers-seminar
+    description: Seminar with five participants (speaker-count estimation)
+    expected_der_max: 0.15
+    synthetic:
+      seed: 4
+      script:
+        - { speaker: A, seconds: 9 }
+        - { speaker: B, seconds: 7 }
+        - { speaker: C, seconds: 8 }
+        - { speaker: D, seconds: 7 }
+        - { speaker: E, seconds: 8 }
+        - { speaker: A, seconds: 6 }
+        - { speaker: C, seconds: 6 }
+        - { speaker: E, seconds: 5 }
+        - { speaker: B, seconds: 6 }
+        - { speaker: D, seconds: 6 }
+
+  - id: syn-single-speaker-noisy-volume
+    description: One professor, background noise and a volume drop (should be one speaker)
+    expected_der_max: 0.05
+    synthetic:
+      seed: 5
+      noise_snr_db: 20
+      script:
+        - { speaker: F, seconds: 25 }
+        - { speaker: F, seconds: 25, gain: 0.3 }
+        - { speaker: F, seconds: 20 }
+
+  - id: syn-noisy-two-speakers-overlap
+    description: Two speakers at 20 dB SNR with interruptions
+    expected_der_max: 0.20
+    synthetic:
+      seed: 6
+      noise_snr_db: 20
+      gap_s: 0.3
+      script:
+        - { speaker: D, seconds: 12 }
+        - { speakers: [D, E], seconds: 2 }
+        - { speaker: E, seconds: 10 }
+        - { speaker: D, seconds: 3 }
+        - { speaker: E, seconds: 8 }
+        - { speakers: [D, E], seconds: 2 }
+        - { speaker: D, seconds: 10 }
+
+  - id: syn-long-chunked-lecture
+    description: 7-minute lecture with two students; v2 processes 5-minute chunks and links speakers
+    expected_der_max: 0.10
+    synthetic:
+      seed: 7
+      script:
+        - { speaker: A, seconds: 90 }
+        - { speaker: B, seconds: 10 }
+        - { speaker: A, seconds: 120 }
+        - { speaker: C, seconds: 12 }
+        - { speaker: A, seconds: 100 }
+        - { speaker: B, seconds: 8 }
+        - { speaker: A, seconds: 60 }
+
+  - id: real-classroom-sample
+    description: Labelled real classroom recording (add under diarization/corpus/)
+    expected_der_max: 0.25
+    reference_path: corpus/real-classroom-sample.rttm
+    audio_path: corpus/real-classroom-sample.wav

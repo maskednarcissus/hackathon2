@@ -247,6 +247,45 @@ async def test_vocabulary_merges_platform_institution_and_discipline(
             )
 
 
+async def test_vocabulary_and_jobs_are_per_language(
+    pool: AsyncConnectionPool, db_url: str, ids: dict[str, str]
+) -> None:
+    inst = ids["institution_id"]
+    with psycopg.connect(db_url, autocommit=True) as conn:
+        conn.execute(
+            "INSERT INTO transcription_vocabularies (institution_id, language, phrases, boost)"
+            " VALUES (%s, 'en-US', ARRAY['office hours'], 9),"
+            " (%s, 'fr-FR', ARRAY['travaux dirigés'], 7)",
+            (inst, inst),
+        )
+    source = PostgresVocabularySource(pool, VocabularyCatalog())
+    en, boosts = await source.phrases_for(inst, None, "en")
+    assert en == ("office hours",) and boosts == {"office hours": 9.0}
+    fr, _ = await source.phrases_for(inst, None, "fr-FR")
+    assert fr == ("travaux dirigés",)
+    pt, _ = await source.phrases_for(inst, None, "pt-BR")
+    assert "office hours" not in pt and "travaux dirigés" not in pt
+    with pytest.raises(psycopg.errors.CheckViolation):
+        with psycopg.connect(db_url, autocommit=True) as conn:
+            conn.execute(
+                "INSERT INTO transcription_vocabularies (institution_id, language, phrases)"
+                " VALUES (%s, 'de-DE', ARRAY['Vorlesung'])",
+                (inst,),
+            )
+
+    service, jobs, *_ = build_service(pool, db_url)
+    rec = seed_recording(db_url, ids)
+    req = request(rec, inst, 1).model_copy(update={"language": "es-419"})
+    job, _ = await service.submit(req)
+    done = await service.run(job.job_id)
+    assert done.request.language == "es-419"
+    with psycopg.connect(db_url) as conn:
+        row = conn.execute(
+            "SELECT language FROM transcription_jobs WHERE id = %s", (job.job_id,)
+        ).fetchone()
+    assert row == ("es-419",)
+
+
 async def test_processed_events(pool: AsyncConnectionPool) -> None:
     events = PostgresProcessedEvents(pool)
     other = PostgresProcessedEvents(pool, consumer="speaker-diarization")
