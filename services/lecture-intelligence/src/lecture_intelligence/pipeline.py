@@ -174,6 +174,7 @@ class LectureStructurer:
             lecture_summary_id=str(uuid.uuid4()),
             transcript_id=req.transcript_id,
             scheduled_class_id=req.scheduled_class_id,
+            institution_id=req.institution_id,
             class_section_id=req.class_section_id,
             course_id=req.course_id,
             course_name=req.course_name,
@@ -196,7 +197,7 @@ class LectureStructurer:
             ),
             created_at=self.clock().isoformat(),
         )
-        self.repository.save(structure)
+        await self.repository.save(structure)
         await self._emit(req, structure)
         return structure
 

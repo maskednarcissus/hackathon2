@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -162,22 +163,24 @@ def test_scheduled_class_filter(assistant_harness: Harness) -> None:
 
 def test_lecture_structure_is_added_as_ai_context(assistant_harness: Harness) -> None:
     h = assistant_harness
-    h.repository.save(
-        LectureStructure(
-            lecture_summary_id="s-1",
-            transcript_id=TRANSCRIPT,
-            scheduled_class_id=CLASS,
-            title="Modelo IS-LM",
-            executive_summary="Aula sobre o modelo IS-LM.",
-            topics=[],
-            concepts=[],
-            questions=[],
-            reading_references=[],
-            validation=ValidationReport(),
-            provenance=Provenance(
-                prompt_id="p", prompt_version="v", model="m", processing_version="x"
-            ),
-            created_at="2026-11-04T00:00:00Z",
+    asyncio.run(
+        h.repository.save(
+            LectureStructure(
+                lecture_summary_id="s-1",
+                transcript_id=TRANSCRIPT,
+                scheduled_class_id=CLASS,
+                title="Modelo IS-LM",
+                executive_summary="Aula sobre o modelo IS-LM.",
+                topics=[],
+                concepts=[],
+                questions=[],
+                reading_references=[],
+                validation=ValidationReport(),
+                provenance=Provenance(
+                    prompt_id="p", prompt_version="v", model="m", processing_version="x"
+                ),
+                created_at="2026-11-04T00:00:00Z",
+            )
         )
     )
     h.gateway.responders["assistant-answer"] = lambda _: {

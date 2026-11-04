@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from lecture_intelligence.actor import ActorResolver
 from lecture_intelligence.app import LectureDeps, create_app
 from lecture_intelligence.clients import (
     GatewayCallError,
@@ -120,7 +121,12 @@ def make_segments(texts: list[str], seconds_each: int = 10) -> list[dict[str, An
 
 
 class Harness:
-    def __init__(self, max_chunk_tokens: int = 12_000) -> None:
+    def __init__(
+        self,
+        max_chunk_tokens: int = 12_000,
+        internal_token: str | None = None,
+        actors: ActorResolver | None = None,
+    ) -> None:
         self.gateway = ScriptedGateway()
         self.transcripts = FakeTranscripts()
         self.repository = InMemoryLectureRepository()
@@ -139,6 +145,8 @@ class Harness:
                     settings=PipelineSettings(max_chunk_tokens=max_chunk_tokens),
                     search=self.search,
                     academic=self.academic,
+                    internal_token=internal_token,
+                    actors=actors or ActorResolver(None),
                 )
             )
         )

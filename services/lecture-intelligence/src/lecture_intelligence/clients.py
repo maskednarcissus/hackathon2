@@ -228,3 +228,31 @@ class HttpAcademicClient:
         response.raise_for_status()
         body: dict[str, Any] = response.json()
         return body
+
+
+class HttpEventBusPublisher:
+    """Dev event bus / gateway: ``POST {EVENT_BUS_URL}/v1/topics/{type}:publish`` (§2)."""
+
+    def __init__(
+        self,
+        base_url: str,
+        internal_token: str | None = None,
+        timeout_s: float = 5.0,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._token = internal_token
+        self._timeout = timeout_s
+        self._transport = transport
+
+    async def publish(
+        self, event_type: str, data: dict[str, Any], institution_id: str | None
+    ) -> None:
+        headers = {"x-internal-token": self._token} if self._token else {}
+        async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
+            response = await client.post(
+                f"{self._base_url}/v1/topics/{event_type}:publish",
+                json=envelope(event_type, data, institution_id),
+                headers=headers,
+            )
+            response.raise_for_status()

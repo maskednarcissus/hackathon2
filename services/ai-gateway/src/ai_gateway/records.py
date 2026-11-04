@@ -69,29 +69,54 @@ class CallRecord:
 
 
 class CallRepository(Protocol):
-    def save(self, record: CallRecord) -> None: ...
+    async def reserve(
+        self, record: CallRecord, budget_usd: float | None, month_start: datetime
+    ) -> tuple[bool, float]:
+        """Atomically check the month-to-date spend against ``budget_usd`` and insert ``record``.
 
-    def get(self, request_id: str) -> CallRecord | None: ...
+        ``record.cost_usd`` holds the pre-call cost estimate (a reservation), so concurrent
+        in-flight calls count against the budget. Returns ``(allowed, spent_before)``; when not
+        allowed the record is stored with outcome ``budget_exceeded``.
+        """
+        ...
 
-    def query(
+    async def save(self, record: CallRecord) -> None: ...
+
+    async def get(self, request_id: str) -> CallRecord | None: ...
+
+    async def query(
         self,
         institution_id: str | None,
         start: datetime | None,
         end: datetime | None,
     ) -> list[CallRecord]: ...
 
+    async def month_spend(self, institution_id: str, month_start: datetime) -> float: ...
+
 
 class InMemoryCallRepository:
     def __init__(self) -> None:
         self._records: dict[str, CallRecord] = {}
 
-    def save(self, record: CallRecord) -> None:
+    async def reserve(
+        self, record: CallRecord, budget_usd: float | None, month_start: datetime
+    ) -> tuple[bool, float]:
+        # No await between check and insert: atomic within the event loop.
+        spent = await self.month_spend(record.institution_id, month_start)
+        allowed = budget_usd is None or spent < budget_usd
+        if not allowed:
+            record.outcome = "budget_exceeded"
+            record.cost_usd = 0.0
+        self._records[record.request_id] = record
+        return allowed, spent
+
+    async def save(self, record: CallRecord) -> None:
         self._records[record.request_id] = record
 
-    def get(self, request_id: str) -> CallRecord | None:
+    async def get(self, request_id: str) -> CallRecord | None:
         return self._records.get(request_id)
 
-    def query(
+    async def query(
         self,
         institution_id: str | None,
         start: datetime | None,
@@ -105,11 +130,15 @@ class InMemoryCallRepository:
             and (end is None or r.created_at < end)
         ]
 
+    async def month_spend(self, institution_id: str, month_start: datetime) -> float:
+        records = await self.query(institution_id, month_start, None)
+        return round(sum(r.cost_usd for r in records), 8)
+
 
 class BudgetRepository(Protocol):
-    def get(self, institution_id: str) -> float | None: ...
+    async def get(self, institution_id: str) -> float | None: ...
 
-    def set(self, institution_id: str, monthly_usd: float | None) -> None: ...
+    async def set(self, institution_id: str, monthly_usd: float | None) -> None: ...
 
 
 class InMemoryBudgetRepository:
@@ -117,10 +146,10 @@ class InMemoryBudgetRepository:
         self._default = default_monthly_usd
         self._budgets: dict[str, float | None] = {}
 
-    def get(self, institution_id: str) -> float | None:
+    async def get(self, institution_id: str) -> float | None:
         return self._budgets.get(institution_id, self._default)
 
-    def set(self, institution_id: str, monthly_usd: float | None) -> None:
+    async def set(self, institution_id: str, monthly_usd: float | None) -> None:
         self._budgets[institution_id] = monthly_usd
 
 

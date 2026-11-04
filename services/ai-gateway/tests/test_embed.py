@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import math
 
 from conftest import INSTITUTION, Harness
@@ -52,7 +53,7 @@ def test_embed_validation_and_budget(harness: Harness) -> None:
     assert harness.client.post("/v1/embed", json=bad).status_code == 400
     bad = {"texts": ["x"], "institutionId": INSTITUTION, "purpose": "other"}
     assert harness.client.post("/v1/embed", json=bad).status_code == 400
-    harness.budgets.set(INSTITUTION, 0.0)
+    asyncio.run(harness.budgets.set(INSTITUTION, 0.0))
     ok = {"texts": ["x"], "institutionId": INSTITUTION, "purpose": "query"}
     resp = harness.client.post("/v1/embed", json=ok)
     assert resp.status_code == 429

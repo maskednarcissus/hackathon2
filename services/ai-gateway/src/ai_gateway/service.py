@@ -24,7 +24,12 @@ from ai_gateway.errors import GatewayError, ProviderError
 from ai_gateway.models import EmbedRequest, GenerateRequest
 from ai_gateway.pricing import PricingTable
 from ai_gateway.prompts import PromptNotFoundError, PromptRegistry, PromptVersion, render_template
-from ai_gateway.providers.base import GenerationProvider, Message, ProviderRequest
+from ai_gateway.providers.base import (
+    GenerationProvider,
+    Message,
+    ProviderRequest,
+    estimate_tokens,
+)
 from ai_gateway.records import BudgetRepository, CallRecord, CallRepository
 from ai_gateway.safety import STANDING_INSTRUCTION, detect_injection, wrap_untrusted
 
@@ -91,11 +96,14 @@ class GatewayService:
             injection_suspected=bool(signals),
             injection_signals=signals,
         )
-        self._check_budget(record)
-
         messages = [Message("user", self._render_user(prompt, req))]
+        record.cost_usd = self.pricing.cost(
+            model, estimate_tokens(prompt.system + messages[0].text), 0
+        )
+        await self._reserve(record)
         started = time.monotonic()
         output: Any = None
+        actual_cost = 0.0
         try:
             for attempt in range(1, MAX_SCHEMA_ATTEMPTS + 1):
                 provider_request = ProviderRequest(
@@ -118,8 +126,8 @@ class GatewayService:
                 record.model = response.model
                 record.input_tokens += response.input_tokens
                 record.output_tokens += response.output_tokens
-                record.cost_usd = round(
-                    record.cost_usd
+                actual_cost = round(
+                    actual_cost
                     + self.pricing.cost(
                         response.model, response.input_tokens, response.output_tokens
                     ),
@@ -142,8 +150,9 @@ class GatewayService:
             record.outcome = "provider_error"
             record.validation_errors = [str(exc)]
         finally:
+            record.cost_usd = actual_cost
             record.latency_ms = int((time.monotonic() - started) * 1000)
-            self.calls.save(record)
+            await self.calls.save(record)
             await self._audit(record)
 
         if record.outcome == "provider_error":
@@ -190,7 +199,11 @@ class GatewayService:
             provider=self.embedder.name,
             model=self.embedder.model,
         )
-        self._check_budget(record)
+        record.cost_usd = self.pricing.cost(
+            record.model, sum(estimate_tokens(t) for t in req.texts), 0
+        )
+        await self._reserve(record)
+        record.cost_usd = 0.0
         started = time.monotonic()
         response = None
         try:
@@ -218,7 +231,7 @@ class GatewayService:
                 record.cost_usd = self.pricing.cost(response.model, response.input_tokens, 0)
         finally:
             record.latency_ms = int((time.monotonic() - started) * 1000)
-            self.calls.save(record)
+            await self.calls.save(record)
             await self._audit(record)
         if response is None or record.outcome != "valid":
             raise GatewayError(
@@ -235,10 +248,11 @@ class GatewayService:
             "usage": {"inputTokens": record.input_tokens, "costUsd": record.cost_usd},
         }
 
-    def month_to_date_spend(self, institution_id: str) -> float:
-        now = self.clock()
-        start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        return round(sum(r.cost_usd for r in self.calls.query(institution_id, start, None)), 8)
+    def month_start(self) -> datetime:
+        return self.clock().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    async def month_to_date_spend(self, institution_id: str) -> float:
+        return await self.calls.month_spend(institution_id, self.month_start())
 
     # ------------------------------------------------------------------ internals
     def _resolve_prompt(self, req: GenerateRequest) -> PromptVersion:
@@ -264,14 +278,12 @@ class GatewayService:
             ) from exc
         return Draft202012Validator(schema)
 
-    def _check_budget(self, record: CallRecord) -> None:
-        budget = self.budgets.get(record.institution_id)
-        if budget is None:
-            return
-        spent = self.month_to_date_spend(record.institution_id)
-        if spent >= budget:
-            record.outcome = "budget_exceeded"
-            self.calls.save(record)
+    async def _reserve(self, record: CallRecord) -> None:
+        """Atomic budget check + insertion of the pending call record (with cost reservation)."""
+
+        budget = await self.budgets.get(record.institution_id)
+        allowed, spent = await self.calls.reserve(record, budget, self.month_start())
+        if not allowed:
             raise GatewayError(
                 "budget_exceeded",
                 "The institution's monthly AI budget has been exhausted",

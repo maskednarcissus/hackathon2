@@ -22,13 +22,20 @@ from __future__ import annotations
 import re
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import Any
 
 import structlog
 from pydantic import ValidationError
 
+from lecture_intelligence.assistant_store import (
+    AssistantRepository,
+    Conversation,
+    StoredAnswer,
+    Turn,
+    answer_text,
+)
 from lecture_intelligence.clients import GatewayCallError, GatewayClient, SearchClient
 from lecture_intelligence.models import (
     AnswerBlock,
@@ -82,59 +89,6 @@ def strip_attribution(text: str) -> str:
     return cleaned[:1].upper() + cleaned[1:] if cleaned else cleaned
 
 
-# ------------------------------------------------------------------ storage ports
-@dataclass
-class Turn:
-    question: str
-    answer_text: str
-
-
-@dataclass
-class Conversation:
-    conversation_id: str
-    student_id: str
-    institution_id: str
-    turns: list[Turn] = field(default_factory=list)
-
-
-@dataclass
-class StoredAnswer:
-    answer: AssistantAnswer
-    student_id: str
-    institution_id: str
-    question: str
-    created_at: datetime
-    feedback: list[dict[str, Any]] = field(default_factory=list)
-
-
-class AssistantRepository(Protocol):
-    def get_conversation(self, conversation_id: str) -> Conversation | None: ...
-
-    def save_conversation(self, conversation: Conversation) -> None: ...
-
-    def save_answer(self, answer: StoredAnswer) -> None: ...
-
-    def get_answer(self, answer_id: str) -> StoredAnswer | None: ...
-
-
-class InMemoryAssistantRepository:
-    def __init__(self) -> None:
-        self.conversations: dict[str, Conversation] = {}
-        self.answers: dict[str, StoredAnswer] = {}
-
-    def get_conversation(self, conversation_id: str) -> Conversation | None:
-        return self.conversations.get(conversation_id)
-
-    def save_conversation(self, conversation: Conversation) -> None:
-        self.conversations[conversation.conversation_id] = conversation
-
-    def save_answer(self, answer: StoredAnswer) -> None:
-        self.answers[answer.answer.answer_id] = answer
-
-    def get_answer(self, answer_id: str) -> StoredAnswer | None:
-        return self.answers.get(answer_id)
-
-
 # ------------------------------------------------------------------ service
 @dataclass
 class AssistantSettings:
@@ -169,19 +123,19 @@ class Assistant:
         self.clock = clock
 
     async def ask(self, req: AskRequest) -> AssistantAnswer:
-        conversation = self._conversation(req)
+        conversation = await self._conversation(req)
         allowed = set(req.class_section_ids)
 
         if question_injection_suspected(req.question):
-            return self._finish(
+            return await self._finish(
                 req, conversation, [], [], "injection_suspected", AnswerProvenance()
             )
 
         sources = await self._retrieve(req, conversation, allowed)
         if not sources:
-            return self._finish(req, conversation, [], [], "no_evidence", AnswerProvenance())
+            return await self._finish(req, conversation, [], [], "no_evidence", AnswerProvenance())
 
-        structures = self._structures(sources)
+        structures = await self._structures(sources)
         payload = {
             "task": "assistant_answer",
             "promptId": ASSISTANT_PROMPT,
@@ -200,6 +154,8 @@ class Assistant:
         except GatewayCallError as exc:
             status = 429 if exc.status_code == 429 else 502
             raise PipelineError(f"ai_gateway_{exc.code}", str(exc), status) from exc
+        request_id = str(body["requestId"]) if body.get("requestId") else None
+        primary = sources[0].result.class_section_id
         provenance = AnswerProvenance(
             prompt_id=ASSISTANT_PROMPT,
             prompt_version=str(body.get("prompt", {}).get("version", "unknown")),
@@ -213,14 +169,41 @@ class Assistant:
             ) from exc
 
         if llm.refusal is not None or not llm.answer:
-            return self._finish(req, conversation, [], [], llm.refusal or "no_evidence", provenance)
+            return await self._finish(
+                req,
+                conversation,
+                [],
+                [],
+                llm.refusal or "no_evidence",
+                provenance,
+                ai_request_id=request_id,
+                primary_section=primary,
+            )
         blocks, citations = self._validate(llm, sources)
         if not blocks:
-            return self._finish(req, conversation, [], [], "no_evidence", provenance)
-        return self._finish(req, conversation, blocks, citations, None, provenance)
+            return await self._finish(
+                req,
+                conversation,
+                [],
+                [],
+                "no_evidence",
+                provenance,
+                ai_request_id=request_id,
+                primary_section=primary,
+            )
+        return await self._finish(
+            req,
+            conversation,
+            blocks,
+            citations,
+            None,
+            provenance,
+            ai_request_id=request_id,
+            primary_section=primary,
+        )
 
-    def feedback(self, req: FeedbackRequest) -> dict[str, Any]:
-        stored = self.repository.get_answer(req.answer_id)
+    async def feedback(self, req: FeedbackRequest) -> dict[str, Any]:
+        stored = await self.repository.get_answer(req.answer_id)
         if stored is None or (req.student_id is not None and req.student_id != stored.student_id):
             raise PipelineError("not_found", "Unknown answerId", 404)
         entry = {
@@ -230,15 +213,14 @@ class Assistant:
             "comment": req.comment,
             "createdAt": self.clock().isoformat(),
         }
-        stored.feedback.append(entry)
-        self.repository.save_answer(stored)
+        await self.repository.add_feedback(req.answer_id, entry)
         return entry
 
     # ------------------------------------------------------------------ internals
-    def _conversation(self, req: AskRequest) -> Conversation:
+    async def _conversation(self, req: AskRequest) -> Conversation:
         if req.conversation_id is None:
             return Conversation(str(uuid.uuid4()), req.student_id, req.institution_id)
-        existing = self.repository.get_conversation(req.conversation_id)
+        existing = await self.repository.get_conversation(req.conversation_id)
         if existing is None:
             return Conversation(req.conversation_id, req.student_id, req.institution_id)
         if existing.student_id != req.student_id or existing.institution_id != req.institution_id:
@@ -278,10 +260,10 @@ class Assistant:
                 break
         return sources
 
-    def _structures(self, sources: list[_Source]) -> list[LectureStructure]:
+    async def _structures(self, sources: list[_Source]) -> list[LectureStructure]:
         found: list[LectureStructure] = []
         for class_id in dict.fromkeys(s.result.scheduled_class_id for s in sources):
-            structure = self.lectures.latest_for_class(class_id)
+            structure = await self.lectures.latest_for_class(class_id)
             if structure is not None:
                 found.append(structure)
         return found
@@ -325,7 +307,7 @@ class Assistant:
         ordered = [citations[s.id] for s in sources if s.id in citations]
         return blocks, ordered
 
-    def _finish(
+    async def _finish(
         self,
         req: AskRequest,
         conversation: Conversation,
@@ -333,6 +315,8 @@ class Assistant:
         citations: list[Citation],
         refusal: Any,
         provenance: AnswerProvenance,
+        ai_request_id: str | None = None,
+        primary_section: str | None = None,
     ) -> AssistantAnswer:
         answer = AssistantAnswer(
             answer_id=str(uuid.uuid4()),
@@ -342,13 +326,21 @@ class Assistant:
             grounded=bool(citations) and refusal is None,
             refusal=refusal,
             provenance=provenance,
+            primary_class_section_id=primary_section
+            or (req.class_section_ids[0] if len(req.class_section_ids) == 1 else None),
         )
-        answer_text = " ".join(b.text for b in blocks) or f"[recusa: {refusal}]"
-        conversation.turns.append(Turn(req.question, answer_text))
+        conversation.turns.append(Turn(req.question, answer_text(answer)))
         conversation.turns = conversation.turns[-self.settings.memory_turns :]
-        self.repository.save_conversation(conversation)
-        self.repository.save_answer(
-            StoredAnswer(answer, req.student_id, req.institution_id, req.question, self.clock())
+        await self.repository.save_conversation(conversation)
+        await self.repository.save_answer(
+            StoredAnswer(
+                answer,
+                req.student_id,
+                req.institution_id,
+                req.question,
+                self.clock(),
+                ai_request_id=ai_request_id,
+            )
         )
         return answer
 

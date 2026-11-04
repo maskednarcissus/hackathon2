@@ -58,6 +58,24 @@ normalised tokens (accent folding, stopwords, light stemming).
 The `fake` provider is deterministic: scripted responses per prompt/task, otherwise the minimal
 instance of the response schema.
 
+## Integration stage
+
+* **Persistence** — `DATABASE_URL` set → Postgres (`src/ai_gateway/adapters/postgres.py`, psycopg 3 async
+  pool): `ai_calls`, `ai_budgets`, `ai_prompt_versions`; unset → in-memory.
+* **Atomic budget check** — every call first inserts its record with a *cost reservation* (estimated input
+  cost) inside a transaction holding a per-institution advisory lock, after summing month-to-date spend; the
+  real cost replaces the reservation when the call finishes. Concurrent in-flight calls therefore count
+  against the budget. `ai_budgets.monthly_usd` is `NUMERIC(12,2)`.
+* **Prompt registry sync** — at start-up the YAML registry is mirrored into `ai_prompt_versions` (new
+  versions inserted, `is_active` follows the `active` pointer). A published version whose file hash changed
+  aborts start-up (`AI_GATEWAY_ALLOW_PROMPT_DRIFT=1` downgrades it to an error log).
+* **Service auth** — with `INTERNAL_API_TOKEN` set, every route except `/health` requires
+  `x-internal-token` (constant-time compare): the gateway has no end-user callers.
+* Pending schema change: `data/migrations/pending/ai-gateway.sql` (drops the `ai_calls → institutions` FK so
+  accounting records are never lost).
+* Postgres tests: `TEST_DATABASE_URL=postgresql://ci@/postgres?host=/var/tmp/cipg&port=5433 pytest`
+  (`tests/test_postgres_pg.py`, fresh `ci_test_*` database with all migrations).
+
 ## Development
 
 ```bash

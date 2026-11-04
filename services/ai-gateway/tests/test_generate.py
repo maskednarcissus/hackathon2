@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from typing import Any
 
@@ -72,7 +73,7 @@ def test_schema_failure_after_retry_returns_422(
     assert response.status_code == 422
     error = response.json()["error"]
     assert error["code"] == "schema_validation_failed"
-    record = harness.calls.get(error["details"]["requestId"])
+    record = asyncio.run(harness.calls.get(error["details"]["requestId"]))
     assert record is not None and record.outcome == "schema_validation_failed"
     assert record.attempts == 2
 

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -28,6 +30,7 @@ from ai_gateway.records import (
     InMemoryCallRepository,
     summarise,
 )
+from ai_gateway.security import install_internal_token
 from ai_gateway.service import GatewayService, GatewaySettings
 
 log = structlog.get_logger(__name__)
@@ -45,6 +48,8 @@ class GatewayDeps:
     audit: AuditClient
     settings: GatewaySettings
     embedder: EmbeddingProvider = field(default_factory=FakeEmbeddingProvider)
+    pool: Any = None  # psycopg_pool.AsyncConnectionPool when DATABASE_URL is set
+    internal_token: str | None = None
 
 
 def deps_from_env() -> GatewayDeps:
@@ -109,7 +114,23 @@ def create_app(deps: GatewayDeps | None = None, service: GatewayService | None =
         settings=deps.settings,
         embedder=deps.embedder,
     )
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        if deps.pool is not None:
+            from ai_gateway.adapters.postgres import sync_prompt_versions
+
+            await deps.pool.open(wait=True)
+            try:
+                await sync_prompt_versions(deps.pool, svc.registry)
+                yield
+            finally:
+                await deps.pool.close()
+        else:
+            yield
+
     app = FastAPI(
+        lifespan=lifespan,
         title="CI AI Gateway Service",
         description=(
             "Sole intermediary between domain services and foundation models: versioned prompts, "
@@ -119,6 +140,8 @@ def create_app(deps: GatewayDeps | None = None, service: GatewayService | None =
         version="0.2.0",
     )
     app.state.service = svc
+    # Every gateway route is service-to-service; only /health stays open.
+    install_internal_token(app, deps.internal_token, lambda path: path != "/health")
 
     @app.exception_handler(GatewayError)
     async def _gateway_error(_: Request, exc: GatewayError) -> JSONResponse:
@@ -156,7 +179,7 @@ def create_app(deps: GatewayDeps | None = None, service: GatewayService | None =
 
     @app.get("/v1/calls/{request_id}")
     async def get_call(request_id: str) -> dict[str, Any]:
-        record = svc.calls.get(request_id)
+        record = await svc.calls.get(request_id)
         if record is None:
             raise GatewayError("not_found", "Unknown requestId", 404)
         return record.to_json()
@@ -167,20 +190,22 @@ def create_app(deps: GatewayDeps | None = None, service: GatewayService | None =
         start: str | None = Query(default=None, alias="from"),
         end: str | None = Query(default=None, alias="to"),
     ) -> dict[str, Any]:
-        records = svc.calls.query(institution_id, _parse_dt(start, "from"), _parse_dt(end, "to"))
+        records = await svc.calls.query(
+            institution_id, _parse_dt(start, "from"), _parse_dt(end, "to")
+        )
         return {"institutionId": institution_id, "from": start, "to": end, **summarise(records)}
 
     @app.get("/v1/budgets/{institution_id}")
     async def get_budget(institution_id: str) -> dict[str, Any]:
         return {
             "institutionId": institution_id,
-            "monthlyUsd": svc.budgets.get(institution_id),
-            "monthToDateUsd": svc.month_to_date_spend(institution_id),
+            "monthlyUsd": await svc.budgets.get(institution_id),
+            "monthToDateUsd": await svc.month_to_date_spend(institution_id),
         }
 
     @app.put("/v1/budgets/{institution_id}")
     async def put_budget(institution_id: str, body: BudgetUpdate) -> dict[str, Any]:
-        svc.budgets.set(institution_id, body.monthly_usd)
+        await svc.budgets.set(institution_id, body.monthly_usd)
         return await get_budget(institution_id)
 
     return app

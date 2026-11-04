@@ -172,6 +172,7 @@ class LectureStructure(CamelModel):
     lecture_summary_id: str
     transcript_id: str
     scheduled_class_id: str
+    institution_id: str | None = None
     class_section_id: str | None = None
     course_id: str | None = None
     course_name: str | None = None
@@ -271,6 +272,8 @@ class AssistantAnswer(CamelModel):
     grounded: bool
     refusal: Refusal | None = None
     provenance: AnswerProvenance
+    # Section of the best retrieved passage — for engagement analytics only, never serialised.
+    primary_class_section_id: str | None = Field(default=None, exclude=True)
 
     def to_json(self) -> dict[str, Any]:
         data = self.model_dump(by_alias=True, mode="json")

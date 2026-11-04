@@ -55,10 +55,24 @@ Port **8006** · Python · FastAPI · calls `ai-gateway` (never a model SDK dire
 - Conversation memory: last 6 turns per `conversationId`, bound to the student and institution
   (another student's id → `404`).
 
+## Integration stage
+
+| Concern | Behaviour |
+|---|---|
+| Persistence | `DATABASE_URL` → Postgres (`adapters/postgres.py`): `lecture_summaries` + `lecture_topics` (with sub-topics via `parent_topic_id`), `concepts`, `questions`, `reading_references` (all with `segment_indexes`), `assistant_conversations/answers/answer_citations/feedback`, `event_inbox`. Conversation memory = last N `assistant_answers` by `turn_index` (assigned under a per-conversation advisory lock). |
+| Events | Publisher: `EVENT_BUS_URL` → `POST {url}/v1/topics/{type}:publish` (with `x-internal-token`), else `PUBSUB_PROJECT_ID` → Pub/Sub, else in-memory. Handlers accept raw envelopes or Pub/Sub push; idempotent by `eventId` (fallback `messageId`) via `event_inbox`; 2xx only after processing. |
+| Service auth | `INTERNAL_API_TOKEN` → `x-internal-token` required on `/internal/*` and `/v1/events/*`. |
+| Retention (`summary`) | `GET /internal/v1/retention/candidates?institutionId&olderThan&kind=summary` → `{kind, institutionId, ids}`; `POST /internal/v1/retention/delete {ids, kind, jobId}` → `{kind, jobId, deletedIds}` (children cascade). |
+| DSR | `POST /internal/v1/dsr/{access\|deletion\|anonymization\|correction\|restriction} {subjectType, subjectId, requestId}` → `{service, status, items, export?}`. Students: access exports conversations, answers and feedback; deletion removes them; anonymisation replaces questions with `[removido a pedido do titular]` and clears feedback comments. Professors / correction / restriction → `not_applicable`. Lecture content is untouched. |
+| Engagement audit | `lecture.viewed` on `GET /v1/lectures/{id}` and `lecture.assistant_question` on ask — `actorType: student`, `metadata.classSectionId`; never the question text. Actor = verified identity JWT (`IDENTITY_JWKS_URL`, EdDSA, `pid` → actorId) or `X-Actor-Id`/`X-Actor-Role` (default `student`). Without a JWKS URL tokens are only decoded (dev). A verified student token whose `pid` ≠ `studentId` on ask → `403`. |
+
+Pending schema: `data/migrations/pending/lecture-intelligence.sql`. Postgres tests:
+`TEST_DATABASE_URL=postgresql://ci@/postgres?host=/var/tmp/cipg&port=5433 pytest` (`tests/test_postgres_pg.py`).
+
 ## Configuration
 
 `AI_GATEWAY_URL` (default `http://localhost:8005`), `TRANSCRIPT_MANAGEMENT_URL` (`http://localhost:4008`),
-`ACADEMIC_INTEGRATION_URL` (`http://localhost:4003`, class/course metadata for event-driven structuring), `AUDIT_SERVICE_URL`, `PUBSUB_PROJECT_ID` (enables Pub/Sub publishing, extra `gcp`), `LECTURE_MAX_CHUNK_TOKENS`.
+`ACADEMIC_INTEGRATION_URL` (`http://localhost:4003`, class/course metadata for event-driven structuring), `DATABASE_URL`, `EVENT_BUS_URL`, `INTERNAL_API_TOKEN`, `IDENTITY_JWKS_URL`, `AUDIT_SERVICE_URL`, `PUBSUB_PROJECT_ID` (enables Pub/Sub publishing, extra `gcp`), `LECTURE_MAX_CHUNK_TOKENS`.
 
 ## Development
 
