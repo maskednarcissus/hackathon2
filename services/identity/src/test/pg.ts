@@ -87,7 +87,7 @@ export async function createTestDatabase(adminUrl: string): Promise<TestDatabase
 export async function seedInstitutions(
   pool: pg.Pool,
   institutionIds: readonly string[],
-): Promise<void> {
+): Promise<string> {
   const holding = randomUUID();
   await pool.query('INSERT INTO holding_companies (id, name, legal_name) VALUES ($1, $2, $3)', [
     holding,
@@ -100,6 +100,7 @@ export async function seedInstitutions(
       [id, holding, `Instituição ${id.slice(0, 4)}`, 'SP'],
     );
   }
+  return holding;
 }
 
 export async function insertPerson(

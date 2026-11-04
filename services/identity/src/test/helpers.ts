@@ -43,6 +43,7 @@ export async function createUser(
     role: Role;
     email?: string;
     password?: string | null;
+    holdingCompanyId?: string;
     /** studentId / professorId to link (must exist as a students/professors row in Postgres). */
     personId?: string;
   },
@@ -58,6 +59,7 @@ export async function createUser(
     role: input.role,
     studentId: input.role === 'student' ? (input.personId ?? randomUUID()) : null,
     professorId: input.role === 'professor' ? (input.personId ?? randomUUID()) : null,
+    holdingCompanyId: input.holdingCompanyId ?? null,
     status: 'active',
     createdAt: now,
     updatedAt: now,

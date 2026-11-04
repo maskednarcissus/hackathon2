@@ -117,6 +117,64 @@ export function buildApp(deps: AppDeps = {}): FastifyInstance {
     }
   };
 
+  const hasValidInternalToken = (req: FastifyRequest): boolean => {
+    const expected = deps.internalToken;
+    const provided = req.headers['x-internal-token'];
+    return (
+      expected !== undefined &&
+      typeof provided === 'string' &&
+      timingSafeEqual(digest(provided), digest(expected))
+    );
+  };
+
+  /**
+   * Calendar writes (publish, cancel) and conflict checks: a service with the internal token
+   * (event-extraction) or a coordinator/admin JWT of the event's institution. Open only when neither the
+   * internal token nor the JWT verifier is configured (dev).
+   */
+  const internalOrStaff =
+    (institutionOf: (req: FastifyRequest) => Promise<string | undefined>) =>
+    async (req: FastifyRequest): Promise<void> => {
+      if (!deps.internalToken && !deps.verifyAccessToken) return;
+      if (hasValidInternalToken(req)) return;
+      const token = extractBearerToken(req.headers.authorization);
+      if (!token || !deps.verifyAccessToken) {
+        throw new AppError(
+          401,
+          'unauthorized',
+          'x-internal-token or a staff bearer token required',
+        );
+      }
+      let claims;
+      try {
+        claims = await deps.verifyAccessToken(token);
+      } catch (err) {
+        const code =
+          err instanceof JwtError && err.code === 'expired' ? 'token_expired' : 'invalid_token';
+        throw new AppError(401, code, 'Invalid or expired access token');
+      }
+      if (claims.role !== 'coordinator' && claims.role !== 'admin') {
+        throw new AppError(403, 'forbidden', 'Coordinator or admin role required');
+      }
+      const institutionId = await institutionOf(req);
+      if (institutionId !== undefined && institutionId !== claims.inst) {
+        throw new AppError(403, 'cross_institution', 'Cross-institution access denied');
+      }
+      req.auth = claims;
+    };
+
+  const bodyInstitution = async (req: FastifyRequest): Promise<string | undefined> => {
+    const body = req.body as { institutionId?: unknown } | undefined;
+    return typeof body?.institutionId === 'string' ? body.institutionId : undefined;
+  };
+  const eventInstitution = async (req: FastifyRequest): Promise<string | undefined> => {
+    const params = req.params as { id?: unknown };
+    if (typeof params.id !== 'string') return undefined;
+    const event = await repo.getEvent(params.id);
+    // Unknown event: deny staff (404 is reported by the handler only to authorised callers).
+    return event?.institutionId ?? '__unknown__';
+  };
+
   /** §4: student routes — the token's pid must be the student, unless staff of the student's institution. */
   const studentAccess = async (req: FastifyRequest, _reply: FastifyReply): Promise<void> => {
     const verify = deps.verifyAccessToken;
@@ -153,16 +211,20 @@ export function buildApp(deps: AppDeps = {}): FastifyInstance {
   app.get('/health', async () => ({ status: 'ok', service: 'calendar' }));
 
   // ---- Calendar events ----------------------------------------------------
-  app.post('/v1/calendar-events', async (req, reply) => {
-    const input = CreateCalendarEventSchema.parse(req.body);
-    const result = await service.publish(input);
-    return reply.status(result.created ? 201 : 200).send({
-      event: result.event,
-      created: result.created,
-      changes: result.changes,
-      conflicts: result.conflicts,
-    });
-  });
+  app.post(
+    '/v1/calendar-events',
+    { preHandler: internalOrStaff(bodyInstitution) },
+    async (req, reply) => {
+      const input = CreateCalendarEventSchema.parse(req.body);
+      const result = await service.publish(input);
+      return reply.status(result.created ? 201 : 200).send({
+        event: result.event,
+        created: result.created,
+        changes: result.changes,
+        conflicts: result.conflicts,
+      });
+    },
+  );
 
   app.get('/v1/calendar-events', async (req) => {
     const q = ListEventsQuerySchema.parse(req.query);
@@ -193,14 +255,18 @@ export function buildApp(deps: AppDeps = {}): FastifyInstance {
     return { items: view === 'student' ? changes.map(toStudentVisible) : changes };
   });
 
-  app.post('/v1/calendar-events/:id/cancel', async (req) => {
-    const { id } = IdParamSchema.parse(req.params);
-    const body = CancelEventSchema.parse(req.body);
-    return service.cancel(id, body.actorId, body.reason, body.source);
-  });
+  app.post(
+    '/v1/calendar-events/:id/cancel',
+    { preHandler: internalOrStaff(eventInstitution) },
+    async (req) => {
+      const { id } = IdParamSchema.parse(req.params);
+      const body = CancelEventSchema.parse(req.body);
+      return service.cancel(id, body.actorId, body.reason, body.source);
+    },
+  );
 
   // ---- Conflicts ------------------------------------------------------------
-  app.post('/v1/conflicts/check', async (req) => {
+  app.post('/v1/conflicts/check', { preHandler: internalOrStaff(bodyInstitution) }, async (req) => {
     const q = ConflictCheckSchema.parse(req.body);
     const conflicts = await detectConflicts(repo, q);
     return {

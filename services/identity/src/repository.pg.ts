@@ -28,6 +28,7 @@ import {
   type CredentialRepository,
   type EnrollmentMirrorRecord,
   type GraceEntry,
+  type InstitutionDirectory,
   type LoginEventRecord,
   type LoginEventRepository,
   type OidcAuthStateRecord,
@@ -76,6 +77,7 @@ const toUser = (r: Row): UserRecord => ({
   role: r['role'] as UserRecord['role'],
   studentId: strOrNull(r['student_id']),
   professorId: strOrNull(r['professor_id']),
+  holdingCompanyId: strOrNull(r['holding_company_id']),
   status: r['status'] as UserRecord['status'],
   createdAt: date(r['created_at']),
   updatedAt: date(r['updated_at']),
@@ -87,8 +89,9 @@ class PgUsers implements UserRepository {
   async create(user: UserRecord): Promise<void> {
     try {
       await this.db.query(
-        `INSERT INTO users (id, institution_id, email, name, role, student_id, professor_id, status, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        `INSERT INTO users (id, institution_id, email, name, role, student_id, professor_id, status, created_at,
+           updated_at, holding_company_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
         [
           user.id,
           user.institutionId,
@@ -100,6 +103,7 @@ class PgUsers implements UserRepository {
           user.status,
           user.createdAt,
           user.updatedAt,
+          user.holdingCompanyId,
         ],
       );
     } catch (err) {
@@ -110,9 +114,19 @@ class PgUsers implements UserRepository {
 
   async update(user: UserRecord): Promise<void> {
     await this.db.query(
-      `UPDATE users SET email = $2, name = $3, role = $4, student_id = $5, professor_id = $6, status = $7
+      `UPDATE users SET email = $2, name = $3, role = $4, student_id = $5, professor_id = $6, status = $7,
+         holding_company_id = $8
        WHERE id = $1`,
-      [user.id, user.email, user.name, user.role, user.studentId, user.professorId, user.status],
+      [
+        user.id,
+        user.email,
+        user.name,
+        user.role,
+        user.studentId,
+        user.professorId,
+        user.status,
+        user.holdingCompanyId,
+      ],
     );
   }
 
@@ -808,5 +822,17 @@ export class PgDsrRepository implements DsrRepository {
         details: details && Object.keys(details).length > 0 ? details : null,
       };
     });
+  }
+}
+
+/** Reads the organisation hierarchy root (institutions → holding company); read-only. */
+export class PgInstitutionDirectory implements InstitutionDirectory {
+  constructor(private readonly db: Queryable) {}
+  async holdingCompanyOf(institutionId: string): Promise<string | undefined> {
+    if (!UUID_RE.test(institutionId)) return undefined;
+    const r = await one(this.db, 'SELECT holding_company_id FROM institutions WHERE id = $1', [
+      institutionId,
+    ]);
+    return r ? String(r['holding_company_id']) : undefined;
   }
 }

@@ -83,6 +83,9 @@ export class TokenService {
       inst: user.institutionId,
       role: user.role,
       ...(pid ? { pid } : {}),
+      ...(user.role === 'group_executive' && user.holdingCompanyId
+        ? { hc: user.holdingCompanyId }
+        : {}),
     };
     return { token: signAccessToken(this.keyStore, claims), claims };
   }

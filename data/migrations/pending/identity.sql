@@ -42,3 +42,24 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_dsr_requests_open_user ON dsr_requests(inst
 -- -----------------------------------------------------------------------------
 CREATE INDEX IF NOT EXISTS idx_revoked_access_tokens_expires ON revoked_access_tokens(expires_at);
 CREATE INDEX IF NOT EXISTS idx_oidc_auth_states_expires ON oidc_auth_states(expires_at);
+
+-- -----------------------------------------------------------------------------
+-- 5. Phase 5 (§2): group executives, linked to a holding company.
+--
+--    ALTER TYPE … ADD VALUE is kept as its OWN statement. Since PostgreSQL 12 it
+--    may run inside a transaction block, but the new label cannot be *used* until
+--    that transaction commits ("unsafe use of new value"). Therefore nothing else
+--    in this file references the literal as a user_role value (the CHECK compares
+--    role::text). When merging into V005, keep this statement first and make sure
+--    no later statement of the same transaction casts 'group_executive' to
+--    user_role; a runner that wraps each file in BEGIN/COMMIT is fine under that rule.
+-- -----------------------------------------------------------------------------
+ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'group_executive';
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS holding_company_id UUID
+    REFERENCES holding_companies(id) ON DELETE RESTRICT;
+ALTER TABLE users DROP CONSTRAINT IF EXISTS ck_users_group_executive;
+ALTER TABLE users ADD CONSTRAINT ck_users_group_executive
+    CHECK ((role::text = 'group_executive') = (holding_company_id IS NOT NULL));
+CREATE INDEX IF NOT EXISTS idx_users_holding_company ON users(holding_company_id)
+    WHERE holding_company_id IS NOT NULL;

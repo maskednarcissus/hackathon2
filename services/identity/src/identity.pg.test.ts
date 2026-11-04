@@ -13,7 +13,12 @@ import {
   type DsrType,
 } from './dsr.js';
 import { generateSigningKey } from './keys.js';
-import { createPgRepositories, GraceCipher, PgDsrRepository } from './repository.pg.js';
+import {
+  createPgRepositories,
+  GraceCipher,
+  PgDsrRepository,
+  PgInstitutionDirectory,
+} from './repository.pg.js';
 import {
   bearer,
   INSTITUTION_A,
@@ -54,11 +59,12 @@ describe.skipIf(!TEST_DATABASE_URL)('identity on PostgreSQL', () => {
   let db: TestDatabase;
   let ctx: TestContext;
   let notifications: FlakyHandler;
+  let holdingId: string;
   const cipher = new GraceCipher(Buffer.alloc(32, 7));
 
   beforeAll(async () => {
     db = await createTestDatabase(TEST_DATABASE_URL ?? '');
-    await seedInstitutions(db.pool, [INSTITUTION_A, INSTITUTION_B]);
+    holdingId = await seedInstitutions(db.pool, [INSTITUTION_A, INSTITUTION_B]);
   });
   afterAll(async () => {
     await db?.drop();
@@ -74,6 +80,7 @@ describe.skipIf(!TEST_DATABASE_URL)('identity on PostgreSQL', () => {
         exportStore: new InMemoryExportStore(),
       },
       personFactory: (institutionId, kind) => insertPerson(db.pool, institutionId, kind),
+      institutions: new PgInstitutionDirectory(db.pool),
     });
   });
 
@@ -429,6 +436,66 @@ describe.skipIf(!TEST_DATABASE_URL)('identity on PostgreSQL', () => {
       expect((list['items'] as Json[]).length).toBeGreaterThanOrEqual(1);
       expect((list['items'] as Json[]).every((i) => i['overdue'] === true)).toBe(true);
     });
+  });
+
+  it('stores group executives with their holding company and enforces the role/holding pairing', async () => {
+    const internal = { 'x-internal-token': INTERNAL_TOKEN };
+    const email = `ceo-${randomUUID().slice(0, 6)}@grupo.example`;
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/v1/users',
+      headers: internal,
+      payload: {
+        institutionId: INSTITUTION_B,
+        email,
+        name: 'CEO',
+        role: 'group_executive',
+        holdingCompanyId: holdingId,
+        password: 'senha-executiva-longa',
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const id = created.json<Json>()['id'] as string;
+    const row = await db.pool.query('SELECT role, holding_company_id FROM users WHERE id = $1', [
+      id,
+    ]);
+    expect(row.rows[0]).toEqual({ role: 'group_executive', holding_company_id: holdingId });
+
+    const wrong = await ctx.app.inject({
+      method: 'POST',
+      url: '/v1/users',
+      headers: internal,
+      payload: {
+        institutionId: INSTITUTION_B,
+        email: `x-${email}`,
+        name: 'X',
+        role: 'group_executive',
+        holdingCompanyId: randomUUID(),
+      },
+    });
+    expect(wrong.statusCode).toBe(403);
+
+    const session = await ctx.app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email, password: 'senha-executiva-longa', institutionId: INSTITUTION_B },
+    });
+    const token = session.json<{ accessToken: string }>().accessToken;
+    const me = await ctx.app.inject({ method: 'GET', url: '/v1/me', headers: bearer(token) });
+    expect(me.json<Json>()).toMatchObject({ role: 'group_executive', holdingCompanyId: holdingId });
+
+    await expect(
+      db.pool.query(
+        `INSERT INTO users (institution_id, email, name, role) VALUES ($1, $2, 'Y', 'group_executive')`,
+        [INSTITUTION_B, `y-${email}`],
+      ),
+    ).rejects.toThrow(/ck_users_group_executive/);
+    await expect(
+      db.pool.query(
+        `INSERT INTO users (institution_id, email, name, role, holding_company_id) VALUES ($1, $2, 'Z', 'admin', $3)`,
+        [INSTITUTION_B, `z-${email}`, holdingId],
+      ),
+    ).rejects.toThrow(/ck_users_group_executive/);
   });
 
   it('grace cipher rejects tampering and other keys', () => {

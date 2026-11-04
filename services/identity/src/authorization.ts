@@ -20,7 +20,8 @@ export type AuthorizationReason =
   | 'section_unknown'
   | 'user_inactive'
   | 'user_unknown'
-  | 'invalid_token';
+  | 'invalid_token'
+  | 'group_scope_only';
 
 export interface AuthorizationDecision {
   allowed: boolean;
@@ -45,6 +46,8 @@ export async function authorizeSectionAccess(
   if (!user) return deny('user_unknown');
   if (user.status !== 'active') return deny('user_inactive');
 
+  // Phase 5 §2: group executives read aggregates only through group-intelligence.
+  if (user.role === 'group_executive') return deny('group_scope_only');
   const section = await repos.access.findSection(classSectionId);
   if (!section) return deny('section_unknown');
   if (section.institutionId !== user.institutionId) return deny('cross_institution');
@@ -93,6 +96,8 @@ export async function accessibleSectionIds(
         .filter((s) => user.professorId !== null && s.professorId === user.professorId)
         .map((s) => s.classSectionId)
         .sort();
+    case 'group_executive':
+      return [];
     case 'coordinator':
     case 'admin':
       return sections.map((s) => s.classSectionId).sort();

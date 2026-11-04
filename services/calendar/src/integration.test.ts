@@ -99,10 +99,14 @@ beforeEach(async () => {
   });
 });
 
-const publish = (overrides: Record<string, unknown> = {}) =>
+const publish = (
+  overrides: Record<string, unknown> = {},
+  headers: Record<string, string> = internal,
+) =>
   app.inject({
     method: 'POST',
     url: '/v1/calendar-events',
+    headers,
     payload: {
       institutionId: INSTITUTION,
       courseId: COURSE,
@@ -159,6 +163,7 @@ describe('event bus publishing', () => {
     await app.inject({
       method: 'POST',
       url: `/v1/calendar-events/${created.id}/cancel`,
+      headers: internal,
       payload: { actorId: provenance.confirmedBy, reason: 'Aula cancelada', source: 'professor' },
     });
     const cancelled = events.published[2] as EventEnvelope<CalendarEventPayload>;
@@ -365,5 +370,88 @@ describe('DSR handler (§5)', () => {
     expect((await dsr('deletion', body(), {} as typeof internal)).statusCode).toBe(401);
     expect((await dsr('portability', body())).statusCode).toBe(400);
     expect((await dsr('deletion', { subjectType: 'student' })).statusCode).toBe(400);
+  });
+});
+
+describe('calendar writes require the internal token or a staff JWT', () => {
+  const conflicts = (headers: Record<string, string>, institutionId = INSTITUTION) =>
+    app.inject({
+      method: 'POST',
+      url: '/v1/conflicts/check',
+      headers,
+      payload: {
+        institutionId,
+        classSectionId: SECTION,
+        type: 'examination',
+        eventDate: '2026-11-20',
+      },
+    });
+
+  it('publishing: internal token or coordinator/admin of the institution', async () => {
+    expect((await publish({}, {})).statusCode).toBe(401);
+    expect((await publish({}, { 'x-internal-token': 'wrong' })).statusCode).toBe(401);
+    expect((await publish({}, auth(token()))).statusCode).toBe(403);
+    expect(
+      (await publish({}, auth(token({ role: 'professor', pid: randomUUID() })))).statusCode,
+    ).toBe(403);
+    expect(
+      (
+        await publish(
+          {},
+          auth(token({ role: 'group_executive', pid: undefined, hc: randomUUID() })),
+        )
+      ).statusCode,
+    ).toBe(403);
+    expect(
+      (await publish({}, auth(token({ role: 'admin', pid: undefined, inst: OTHER_INSTITUTION }))))
+        .statusCode,
+    ).toBe(403);
+    expect(
+      (await publish({}, auth(token({ role: 'coordinator', pid: undefined })))).statusCode,
+    ).toBe(201);
+    expect((await publish({ eventDate: '2026-11-21' }, internal)).statusCode).toBe(200);
+  });
+
+  it('cancelling checks the event institution', async () => {
+    const created = (await publish()).json<{ event: CalendarEvent }>().event;
+    const cancel = (headers: Record<string, string>, id = created.id) =>
+      app.inject({
+        method: 'POST',
+        url: `/v1/calendar-events/${id}/cancel`,
+        headers,
+        payload: { actorId: randomUUID(), reason: 'Cancelada' },
+      });
+    expect((await cancel({})).statusCode).toBe(401);
+    expect(
+      (await cancel(auth(token({ role: 'admin', pid: undefined, inst: OTHER_INSTITUTION }))))
+        .statusCode,
+    ).toBe(403);
+    expect(
+      (await cancel(auth(token({ role: 'admin', pid: undefined })), randomUUID())).statusCode,
+    ).toBe(403);
+    expect((await cancel(internal, randomUUID())).statusCode).toBe(404);
+    expect((await cancel(auth(token({ role: 'admin', pid: undefined })))).statusCode).toBe(200);
+  });
+
+  it('conflict checks: internal token or staff of the institution', async () => {
+    expect((await conflicts({})).statusCode).toBe(401);
+    expect((await conflicts(auth(token()))).statusCode).toBe(403);
+    expect(
+      (await conflicts(auth(token({ role: 'coordinator', pid: undefined })), OTHER_INSTITUTION))
+        .statusCode,
+    ).toBe(403);
+    expect((await conflicts(auth(token({ role: 'coordinator', pid: undefined })))).statusCode).toBe(
+      200,
+    );
+    expect((await conflicts(internal)).statusCode).toBe(200);
+  });
+
+  it('student calendars stay closed to group executives', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/v1/students/${STUDENT}/calendar-events`,
+      headers: auth(token({ role: 'group_executive', pid: undefined, hc: randomUUID() })),
+    });
+    expect(res.statusCode).toBe(403);
   });
 });

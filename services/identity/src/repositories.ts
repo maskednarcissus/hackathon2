@@ -12,6 +12,8 @@ export interface UserRecord {
   role: Role;
   studentId: string | null;
   professorId: string | null;
+  /** Only for `group_executive`: the holding company whose institutions they oversee. */
+  holdingCompanyId: string | null;
   status: UserStatus;
   createdAt: Date;
   updatedAt: Date;
@@ -445,3 +447,18 @@ export const envSecretResolver: SecretResolver = (ref) => {
   if (ref.startsWith('env:')) return process.env[ref.slice(4)] ?? null;
   return null;
 };
+
+/** Institution → holding company lookup (organisation hierarchy). */
+export interface InstitutionDirectory {
+  holdingCompanyOf(institutionId: string): Promise<string | undefined>;
+}
+
+export class InMemoryInstitutionDirectory implements InstitutionDirectory {
+  private readonly items = new Map<string, string>();
+  set(institutionId: string, holdingCompanyId: string): void {
+    this.items.set(institutionId, holdingCompanyId);
+  }
+  async holdingCompanyOf(institutionId: string): Promise<string | undefined> {
+    return this.items.get(institutionId);
+  }
+}

@@ -39,7 +39,9 @@ import {
 } from './password.js';
 import {
   createInMemoryRepositories,
+  InMemoryInstitutionDirectory,
   SecretReferenceRequiredError,
+  type InstitutionDirectory,
   type Repositories,
   type UserRecord,
 } from './repositories.js';
@@ -77,6 +79,8 @@ export interface AppDeps {
   audit: AuditClient;
   identityProviders: IdentityProviderRegistry;
   config: IdentityConfig;
+  /** Institution → holding company (Phase 5 group executives). */
+  institutions: InstitutionDirectory;
   /** LGPD data subject rights workflow (Phase 4 · 4.11). */
   dsr: DsrDeps;
   logger?: FastifyBaseLogger | boolean;
@@ -98,6 +102,7 @@ export function createDefaultDeps(overrides: Partial<AppDeps> = {}): AppDeps {
         fetch: globalThis.fetch,
       }),
     config: { ...DEFAULT_CONFIG, ...overrides.config },
+    institutions: overrides.institutions ?? new InMemoryInstitutionDirectory(),
     dsr: overrides.dsr ?? {
       repo: new InMemoryDsrRepository(),
       handlers: [],
@@ -131,8 +136,23 @@ const CreateUserSchema = z
     password: z.string().min(PASSWORD_MIN_LENGTH).max(1024).optional(),
     studentId: uuid.optional(),
     professorId: uuid.optional(),
+    holdingCompanyId: uuid.optional(),
   })
   .superRefine((value, ctx) => {
+    if (value.role === 'group_executive' && !value.holdingCompanyId) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['holdingCompanyId'],
+        message: 'holdingCompanyId is required for group executives',
+      });
+    }
+    if (value.role !== 'group_executive' && value.holdingCompanyId) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['holdingCompanyId'],
+        message: 'holdingCompanyId only applies to group executives',
+      });
+    }
     if (value.role === 'student' && !value.studentId) {
       ctx.addIssue({
         code: 'custom',
@@ -236,6 +256,7 @@ export interface PublicUser {
   role: UserRecord['role'];
   studentId: string | null;
   professorId: string | null;
+  holdingCompanyId: string | null;
 }
 
 const publicUser = (u: UserRecord): PublicUser => ({
@@ -246,9 +267,12 @@ const publicUser = (u: UserRecord): PublicUser => ({
   role: u.role,
   studentId: u.studentId,
   professorId: u.professorId,
+  holdingCompanyId: u.holdingCompanyId,
 });
 
-const actorTypeFor = (role: UserRecord['role'] | undefined): AuditActorType => role ?? 'system';
+/** The audit actor enum has no group role yet: group executives are recorded as admins (metadata keeps the role). */
+const actorTypeFor = (role: UserRecord['role'] | undefined): AuditActorType =>
+  role === 'group_executive' ? 'admin' : (role ?? 'system');
 
 const digest = (value: string): Buffer => createHash('sha256').update(value).digest();
 
@@ -484,11 +508,29 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
 
   // --- Users (admin) ------------------------------------------------------------
 
-  app.post('/v1/users', { preHandler: adminOnly }, async (request, reply) => {
+  app.post('/v1/users', async (request, reply) => {
     const body = parseOrThrow(CreateUserSchema, request.body);
-    const admin = await currentUser(request);
-    if (body.institutionId !== admin.institutionId) {
-      throw forbidden('Admins can only manage users of their institution', 'cross_institution');
+    // Admin of the institution, or a service with the internal token (provisioning).
+    let admin: UserRecord | undefined;
+    if (!hasInternalToken(request)) {
+      const claims = await optionalBearer(request);
+      if (!claims) throw unauthorized('Admin bearer token or internal token required');
+      if (claims.role !== 'admin') throw forbidden('Admin role required');
+      request.auth = claims;
+      admin = await currentUser(request);
+      if (body.institutionId !== admin.institutionId) {
+        throw forbidden('Admins can only manage users of their institution', 'cross_institution');
+      }
+    }
+    if (body.role === 'group_executive') {
+      // Phase 5 §2: the home institution must belong to the executive's holding company.
+      const holding = await deps.institutions.holdingCompanyOf(body.institutionId);
+      if (holding === undefined || holding !== body.holdingCompanyId) {
+        throw forbidden(
+          'The institution does not belong to this holding company',
+          'holding_company_mismatch',
+        );
+      }
     }
     if (await repos.users.findByEmail(body.institutionId, body.email)) {
       throw new AppError(
@@ -506,6 +548,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       role: body.role,
       studentId: body.studentId ?? null,
       professorId: body.professorId ?? null,
+      holdingCompanyId: body.holdingCompanyId ?? null,
       status: 'active',
       createdAt: now,
       updatedAt: now,
@@ -522,8 +565,8 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     }
     await audit.record({
       tenantId: user.institutionId,
-      actorId: admin.id,
-      actorType: 'admin',
+      ...(admin ? { actorId: admin.id } : {}),
+      actorType: admin ? 'admin' : 'system',
       action: 'auth.user_created',
       resourceType: 'user',
       resourceId: user.id,
@@ -761,7 +804,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     await audit.record({
       tenantId: institutionId,
       actorId: user.id,
-      actorType: user.role,
+      actorType: actorTypeFor(user.role),
       action: 'auth.login_succeeded',
       resourceType: 'user',
       resourceId: user.id,

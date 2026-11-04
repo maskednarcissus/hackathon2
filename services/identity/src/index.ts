@@ -12,8 +12,18 @@ import {
 } from './dsr.js';
 import { KeyStore, loadSigningKey } from './keys.js';
 import { hashPassword } from './password.js';
-import { createInMemoryRepositories, type Repositories } from './repositories.js';
-import { createPgRepositories, GraceCipher, PgDsrRepository } from './repository.pg.js';
+import {
+  createInMemoryRepositories,
+  InMemoryInstitutionDirectory,
+  type InstitutionDirectory,
+  type Repositories,
+} from './repositories.js';
+import {
+  createPgRepositories,
+  GraceCipher,
+  PgDsrRepository,
+  PgInstitutionDirectory,
+} from './repository.pg.js';
 import type { DsrRepository } from './dsr.js';
 import { systemClock } from './tokens.js';
 
@@ -37,6 +47,7 @@ async function main(): Promise<void> {
   const databaseUrl = env['DATABASE_URL'];
   let repos: Repositories;
   let dsrRepo: DsrRepository;
+  let institutions: InstitutionDirectory;
   if (databaseUrl) {
     const pool = new pg.Pool({
       connectionString: databaseUrl,
@@ -48,10 +59,13 @@ async function main(): Promise<void> {
       : GraceCipher.fromSigningKey(key.privateKey);
     repos = createPgRepositories(pool, { graceCipher });
     dsrRepo = new PgDsrRepository(pool);
+    institutions = new PgInstitutionDirectory(pool);
     logger.info('using PostgreSQL repositories');
   } else {
     repos = createInMemoryRepositories();
     dsrRepo = new InMemoryDsrRepository();
+    // In-memory mode knows no holding companies: group executives can only be created with Postgres.
+    institutions = new InMemoryInstitutionDirectory();
     logger.warn('DATABASE_URL is not set: using in-memory repositories (data is lost on restart)');
   }
 
@@ -73,6 +87,7 @@ async function main(): Promise<void> {
       issuer: env['IDENTITY_ISSUER'] ?? DEFAULT_CONFIG.issuer,
       internalToken,
     },
+    institutions,
     dsr: {
       repo: dsrRepo,
       handlers: parseHandlerUrls(env['DSR_HANDLER_URLS']).map(
@@ -104,6 +119,7 @@ async function main(): Promise<void> {
       role: 'admin',
       studentId: null,
       professorId: null,
+      holdingCompanyId: null,
       status: 'active',
       createdAt: now,
       updatedAt: now,

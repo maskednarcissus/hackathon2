@@ -244,7 +244,7 @@ export function keyIdFor(publicKey: KeyObject): string {
 // Access tokens
 // ---------------------------------------------------------------------------
 
-export const ROLES = ['student', 'professor', 'coordinator', 'admin'] as const;
+export const ROLES = ['student', 'professor', 'coordinator', 'admin', 'group_executive'] as const;
 export type Role = (typeof ROLES)[number];
 
 export const AccessTokenClaimsSchema = z.object({
@@ -257,6 +257,8 @@ export const AccessTokenClaimsSchema = z.object({
   inst: z.string(),
   role: z.enum(ROLES),
   pid: z.string().optional(),
+  /** Holding company id — only on `group_executive` tokens (Phase 5 §2). */
+  hc: z.string().optional(),
 });
 
 export type AccessTokenClaims = z.infer<typeof AccessTokenClaimsSchema>;

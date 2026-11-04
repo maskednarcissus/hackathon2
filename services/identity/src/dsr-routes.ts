@@ -100,9 +100,10 @@ export function registerDsrRoutes(app: FastifyInstance, deps: DsrRouteDeps): Dsr
     await deps.audit.record({
       tenantId: request.institutionId,
       ...(actorId ? { actorId } : {}),
-      actorType: actorId
-        ? ((await deps.repos.users.findById(actorId))?.role ?? 'system')
-        : 'system',
+      actorType: await (async (): Promise<AuditEventInput['actorType']> => {
+        const role = actorId ? (await deps.repos.users.findById(actorId))?.role : undefined;
+        return role === 'group_executive' ? 'admin' : (role ?? 'system');
+      })(),
       action,
       resourceType: 'dsr_request',
       resourceId: request.id,

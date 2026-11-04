@@ -109,6 +109,14 @@ rotation works by publishing the new key while keeping the old one in `IDENTITY_
 | `DSR_EXPORT_DIR`                                                                     | —             | Directory for access-request bundles; unset → in-memory                        |
 | `IDENTITY_BOOTSTRAP_ADMIN_EMAIL` / `_PASSWORD` / `IDENTITY_BOOTSTRAP_INSTITUTION_ID` | —             | Creates a first admin at start-up                                              |
 
+## Group executives (Phase 5 §2)
+
+Role `group_executive`, linked to a holding company (`holdingCompanyId`). Created with `POST /v1/users` by an admin of an
+institution of that holding company, or with the internal token; the home `institutionId` must belong to the holding
+(`403 holding_company_mismatch`). Access tokens carry `hc`; `/v1/me` returns `holdingCompanyId`. `/v1/authorize` denies every
+per-institution resource (`group_scope_only`) and `/v1/me/sections` is empty — group data is read only through
+group-intelligence. Postgres resolves institution → holding from `institutions`; audit records them as `admin` actors.
+
 ## Integration stage (Postgres, internal token)
 
 - `DATABASE_URL` set → `src/repository.pg.ts` (all repositories + `PgDsrRepository`); unset → in-memory.
