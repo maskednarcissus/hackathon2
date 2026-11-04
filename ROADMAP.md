@@ -6,9 +6,28 @@
 | ---------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 2026-11-04 | Phase 0 | Monorepo skeleton created — all directories, root config, 4 apps, 17 services, 6 packages, hardware, infrastructure, data, docs and tests scaffolded.                                                                                                                                                                                  |
 | 2026-11-04 | Phase 0 | **Phase 0 Complete** — Initial academic SQL schema (V001), ERD, CI/CD GitHub Actions workflows, ADR-001 through ADR-004, LGPD recording policy template, Terraform GCP modules (networking, storage, database, pubsub, iam, secrets), OpenAPI 3.1 specification, and AI/audio benchmark frameworks all implemented. Ready for Phase 1. |
+| 2026-11-05 | Phases 1–6 | Cloud session handoff (branch `cloud-handoff`). Phases 1–4 implemented and tested; integration stage (Postgres, event bus, sync, internal auth) done per service; Phases 5–6 backend done, some UI/connectors WIP. See `HANDOFF.md`. |
 
 > [!NOTE]
 > This roadmap reflects the phased delivery plan derived from the product specification (`GENERAL.md`), engineering standards (`STANDARDS.md`) and UI-UX specification (`UI-UX.md`). Phases build on each other; no phase should be considered complete until its Definition of Done criteria are met.
+
+---
+
+## Status at cloud handoff (2026-11-05)
+
+Legend: ✅ implemented and tested (in-memory + Postgres where applicable) · 🟡 in progress / partial (WIP commit) · ⬜ not started · 🔬 implemented but needs real-world/field validation.
+
+| Phase | Status | Notes |
+|---|---|---|
+| 1 — Capture & Transcription | ✅ 1.1–1.18 · 🔬 | DoD items needing field data: physical device, WER on real corpus (no corpus yet), diarization on real rooms. Google STT adapter never executed. |
+| 2 — Classroom Intelligence | ✅ 2.1–2.22 · 🔬 | Heuristic extractor eval: P/R 1.0 on 50 in-sample + 8 hold-out cases; LLM path not measured live. |
+| 3 — Student Experience | ✅ 3.1–3.17 · 🔬 | WCAG: automated audit 60/60 against mocks; manual screen-reader pass pending. |
+| 4 — Institutional Intelligence | ✅ 4.1–4.12 backend · 🟡 4.x admin UI reconciliation | Admin pages built; reconciliation with real backend shapes was in progress. |
+| Integration stage | ✅ per-service Postgres, bus publishers, sync push, internal token · 🟡 dev bus, subscriptions, Terraform wiring, compose, e2e | Pending schema files in `data/migrations/pending/` still to be merged into `V005`. |
+| 5 — Group Intelligence | ✅ 5.2–5.10 backend, 5.1 role (`group_executive`) · ⬜ 5.1 `/grupo` UI | BigQuery/Terraform never executed. |
+| 6 — Advanced Capabilities | ✅ 6.1, 6.2, 6.3, 6.4 (transcription/search/structuring/extraction skip), 6.7, 6.8, 6.9, 6.10 · 🟡 6.5, 6.6 connectors, FLAC in ingestion/processing, language propagation | External APIs tested only with fixtures/fakes. |
+
+The per-phase Definition of Done checklists below are kept as the acceptance target; items marked ✅ above are code-complete, items needing field validation remain unchecked until verified on real hardware/data.
 
 ---
 
