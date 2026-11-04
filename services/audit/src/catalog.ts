@@ -28,6 +28,10 @@ export const RECORDING_LIFECYCLE_ACTIONS = [
   'alert.raised',
   'alert.acknowledged',
   'alert.resolved',
+  'alert.escalated',
+  'alert.assigned',
+  'alert.in_progress',
+  'alert.commented',
   // Phase 2 — classroom intelligence (phase-2 contract §8)
   'ai.generation',
   'lecture.structured',
