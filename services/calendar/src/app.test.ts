@@ -297,3 +297,190 @@ describe('calendar service', () => {
     expect(bad.statusCode).toBe(400);
   });
 });
+
+describe('student calendar (phase 3)', () => {
+  const INST = randomUUID();
+  const SEC = randomUUID();
+  const COURSE = randomUUID();
+  const STUDENT = randomUUID();
+  const PROF = randomUUID();
+  const clock = { now: (): Date => new Date('2026-11-06T12:00:00.000Z') };
+  let app: FastifyInstance;
+
+  beforeEach(async (): Promise<void> => {
+    app = buildApp({ clock });
+    await app.inject({
+      method: 'POST',
+      url: '/v1/sections',
+      payload: {
+        sections: [
+          {
+            classSectionId: SEC,
+            institutionId: INST,
+            courseId: COURSE,
+            courseName: 'Direito Constitucional',
+            sectionCode: 'DIR-201',
+          },
+        ],
+      },
+    });
+    await app.inject({
+      method: 'POST',
+      url: '/v1/enrollments/bulk',
+      payload: { classSectionId: SEC, studentIds: [STUDENT] },
+    });
+  });
+
+  const publishFor = async (payload: Record<string, unknown>): Promise<{ event: CalendarEvent }> =>
+    (
+      await app.inject({
+        method: 'POST',
+        url: '/v1/calendar-events',
+        payload: {
+          institutionId: INST,
+          courseId: COURSE,
+          classSectionId: SEC,
+          type: 'assignment',
+          title: 'Trabalho final',
+          eventDate: '2026-11-15',
+          changedBy: PROF,
+          ...payload,
+        },
+      })
+    ).json<{ event: CalendarEvent }>();
+
+  interface StudentItem extends Omit<CalendarEvent, 'provenance'> {
+    source: { quote: string; startMs: number } | null;
+    history: Record<string, unknown>[];
+    provenance?: unknown;
+  }
+
+  it('returns status, isOfficial, source and student-visible history with from/to filters', async () => {
+    const extractedEventId = randomUUID();
+    const prov = provenance('aquele trabalho agora fica para o dia 15 de novembro');
+    const first = await publishFor({ extractedEventId, provenance: prov, eventDate: '2026-11-10' });
+    await publishFor({ extractedEventId, provenance: prov, eventDate: '2026-11-15' });
+    await publishFor({
+      type: 'reading_deadline',
+      title: 'Leitura cap. 3',
+      eventDate: '2026-12-02',
+      isOfficial: true,
+    });
+
+    const res = await app.inject({
+      url: `/v1/students/${STUDENT}/calendar-events?from=2026-11-01&to=2026-11-30`,
+    });
+    expect(res.statusCode).toBe(200);
+    const items = res.json<{ items: StudentItem[] }>().items;
+    expect(items).toHaveLength(1);
+    const item = items[0];
+    expect(item?.id).toBe(first.event.id);
+    expect(item?.status).toBe('published');
+    expect(item?.isOfficial).toBe(false);
+    expect(item?.source?.quote).toContain('dia 15 de novembro');
+    expect(item?.provenance).toBeUndefined();
+    expect(item?.history).toHaveLength(1);
+    expect(item?.history[0]).toMatchObject({
+      changeType: 'date_change',
+      previousValue: '2026-11-10',
+      newValue: '2026-11-15',
+    });
+    expect(item?.history[0]).not.toHaveProperty('changedBy');
+
+    const bad = await app.inject({
+      url: `/v1/students/${STUDENT}/calendar-events?from=2026-12-01&to=2026-11-01`,
+    });
+    expect(bad.statusCode).toBe(400);
+  });
+
+  it('shows cancellations to students by default', async () => {
+    const { event } = await publishFor({});
+    await app.inject({
+      method: 'POST',
+      url: `/v1/calendar-events/${event.id}/cancel`,
+      payload: { actorId: PROF, reason: 'Trabalho dispensado' },
+    });
+    const items = (await app.inject({ url: `/v1/students/${STUDENT}/calendar-events` })).json<{
+      items: StudentItem[];
+    }>().items;
+    expect(items[0]?.status).toBe('cancelled');
+    expect(items[0]?.history.at(-1)).toMatchObject({
+      changeType: 'cancellation',
+      reason: 'Trabalho dispensado',
+    });
+  });
+
+  it('serves ordered history with a student view that hides the actor', async () => {
+    const extractedEventId = randomUUID();
+    const prov = provenance();
+    const { event } = await publishFor({ extractedEventId, provenance: prov });
+    await publishFor({ extractedEventId, provenance: prov, title: 'Trabalho final (em dupla)' });
+    await publishFor({
+      extractedEventId,
+      provenance: prov,
+      title: 'Trabalho final (em dupla)',
+      eventDate: '2026-11-22',
+    });
+    const full = (await app.inject({ url: `/v1/calendar-events/${event.id}/history` })).json<{
+      items: CalendarEventChange[];
+    }>().items;
+    expect(full.map((c) => c.field)).toEqual(['title', 'eventDate']);
+    expect(full[0]?.changedBy).toBe(PROF);
+    const student = (
+      await app.inject({ url: `/v1/calendar-events/${event.id}/history?view=student` })
+    ).json<{ items: Record<string, unknown>[] }>().items;
+    expect(student.map((c) => c['field'])).toEqual(['title', 'eventDate']);
+    for (const c of student) expect(c).not.toHaveProperty('changedBy');
+  });
+
+  describe('ICS feed', () => {
+    const issue = async (): Promise<{ token: string; feedPath: string; rotated: boolean }> => {
+      const res = await app.inject({
+        method: 'POST',
+        url: `/v1/students/${STUDENT}/calendar-feed-token`,
+      });
+      expect(res.statusCode).toBe(201);
+      expect(res.headers['cache-control']).toBe('no-store');
+      return res.json();
+    };
+
+    it('issues an unguessable token and serves the student feed', async () => {
+      await publishFor({
+        type: 'examination',
+        title: 'Prova 1',
+        eventDate: '2026-11-20',
+        eventTime: '19:00',
+      });
+      const { token, feedPath, rotated } = await issue();
+      expect(rotated).toBe(false);
+      expect(token).toMatch(/^cft_[A-Za-z0-9_-]{43}$/);
+      const res = await app.inject({ url: feedPath });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers['content-type']).toBe('text/calendar; charset=utf-8');
+      const body = res.body;
+      expect(body.startsWith('BEGIN:VCALENDAR\r\n')).toBe(true);
+      expect(body).toContain('DTSTART;TZID=America/Sao_Paulo:20261120T190000');
+      expect(body.replace(/\r\n /g, '')).toContain(
+        'Disciplina: Direito Constitucional (turma DIR-201)',
+      );
+    });
+
+    it('rejects missing, wrong and rotated tokens with the same 401', async () => {
+      const first = await issue();
+      const second = await issue();
+      expect(second.rotated).toBe(true);
+      expect(second.token).not.toBe(first.token);
+      const base = `/v1/students/${STUDENT}/calendar.ics`;
+      for (const url of [base, `${base}?token=${first.token}`, `${base}?token=cft_wrong`]) {
+        const res = await app.inject({ url });
+        expect(res.statusCode).toBe(401);
+        expect(res.json<{ error: { code: string } }>().error.code).toBe('invalid_feed_token');
+      }
+      const otherStudent = await app.inject({
+        url: `/v1/students/${randomUUID()}/calendar.ics?token=${second.token}`,
+      });
+      expect(otherStudent.statusCode).toBe(401);
+      expect((await app.inject({ url: `${base}?token=${second.token}` })).statusCode).toBe(200);
+    });
+  });
+});

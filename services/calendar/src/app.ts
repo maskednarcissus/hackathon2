@@ -2,13 +2,23 @@ import { randomUUID } from 'node:crypto';
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
 import { InMemoryAuditClient, type AuditClient } from './audit.js';
 import { detectConflicts } from './conflicts.js';
-import { notFound, registerErrorHandler } from './errors.js';
+import { byChangeOrder, toStudentVisible, type SectionRecord } from './domain.js';
+import {
+  InMemoryFeedTokenRepository,
+  generateFeedToken,
+  verifyFeedToken,
+  type FeedTokenRepository,
+} from './feed-tokens.js';
+import { renderIcs } from './ics.js';
+import { AppError, notFound, registerErrorHandler } from './errors.js';
 import { InMemoryCalendarRepository, type CalendarRepository } from './repository.js';
 import {
   CancelEventSchema,
   ConflictCheckSchema,
   CreateCalendarEventSchema,
   EnrollmentsBulkSchema,
+  FeedQuerySchema,
+  HistoryQuerySchema,
   IdParamSchema,
   InstitutionQuerySchema,
   ListEventsQuerySchema,
@@ -24,15 +34,38 @@ export interface AppDeps {
   repository?: CalendarRepository;
   audit?: AuditClient;
   clock?: Clock;
+  feedTokens?: FeedTokenRepository;
   logger?: FastifyServerOptions['logger'];
+}
+
+/** Feed tokens travel in the query string; never write them to logs. */
+export const redactTokens = (url: string): string =>
+  url.replace(/([?&]token=)[^&]*/g, '$1[REDACTED]');
+
+type LoggerOption = NonNullable<FastifyServerOptions['logger']>;
+
+function withRedaction(logger: FastifyServerOptions['logger']): LoggerOption {
+  if (logger === undefined || logger === false) return false;
+  const base = logger === true ? {} : logger;
+  return {
+    ...base,
+    serializers: {
+      req: (req: { method: string; url: string }): Record<string, string> => ({
+        method: req.method,
+        url: redactTokens(req.url),
+      }),
+    },
+  };
 }
 
 export function buildApp(deps: AppDeps = {}): FastifyInstance {
   const repo = deps.repository ?? new InMemoryCalendarRepository();
   const audit = deps.audit ?? new InMemoryAuditClient();
-  const service = new CalendarService(repo, audit, deps.clock ?? systemClock);
+  const clock = deps.clock ?? systemClock;
+  const service = new CalendarService(repo, audit, clock);
+  const feedTokens = deps.feedTokens ?? new InMemoryFeedTokenRepository();
 
-  const app = Fastify({ logger: deps.logger ?? false });
+  const app = Fastify({ logger: withRedaction(deps.logger) });
   registerErrorHandler(app);
 
   app.get('/health', async () => ({ status: 'ok', service: 'calendar' }));
@@ -72,8 +105,10 @@ export function buildApp(deps: AppDeps = {}): FastifyInstance {
 
   app.get('/v1/calendar-events/:id/history', async (req) => {
     const { id } = IdParamSchema.parse(req.params);
+    const { view } = HistoryQuerySchema.parse(req.query);
     if (!(await repo.getEvent(id))) throw notFound('Calendar event', id);
-    return { items: await repo.listChanges(id) };
+    const changes = (await repo.listChanges(id)).sort(byChangeOrder);
+    return { items: view === 'student' ? changes.map(toStudentVisible) : changes };
   });
 
   app.post('/v1/calendar-events/:id/cancel', async (req) => {
@@ -101,6 +136,8 @@ export function buildApp(deps: AppDeps = {}): FastifyInstance {
         institutionId: s.institutionId,
         courseId: s.courseId,
         professorId: s.professorId ?? null,
+        courseName: s.courseName ?? null,
+        sectionCode: s.sectionCode ?? null,
       });
     }
     return { upserted: sections.length };
@@ -150,20 +187,96 @@ export function buildApp(deps: AppDeps = {}): FastifyInstance {
   });
 
   // ---- Student fan-out (Phase 3 groundwork) --------------------------------
+  const studentEvents = async (
+    studentId: string,
+    q: {
+      from?: string | undefined;
+      to?: string | undefined;
+      includeCancelled?: boolean | undefined;
+    },
+  ): Promise<Awaited<ReturnType<CalendarRepository['listEvents']>>> => {
+    const sectionIds = await repo.sectionsOfStudent(studentId);
+    if (sectionIds.length === 0) return [];
+    return repo.listEvents({
+      classSectionIds: sectionIds,
+      includeCancelled: q.includeCancelled ?? true,
+      ...(q.from !== undefined ? { from: q.from } : {}),
+      ...(q.to !== undefined ? { to: q.to } : {}),
+    });
+  };
+
+  // ---- Student view (3.8, 3.9) ----------------------------------------------
   app.get('/v1/students/:studentId/calendar-events', async (req) => {
     const { studentId } = StudentParamSchema.parse(req.params);
     const q = StudentEventsQuerySchema.parse(req.query);
-    const sectionIds = await repo.sectionsOfStudent(studentId);
-    const events =
-      sectionIds.length === 0
-        ? []
-        : await repo.listEvents({
-            classSectionIds: sectionIds,
-            ...(q.from !== undefined ? { from: q.from } : {}),
-            ...(q.to !== undefined ? { to: q.to } : {}),
-            ...(q.includeCancelled !== undefined ? { includeCancelled: q.includeCancelled } : {}),
-          });
-    return { studentId, items: events, total: events.length };
+    const events = await studentEvents(studentId, q);
+    const items = await Promise.all(
+      events.map(async (e) => {
+        const { provenance, ...rest } = e;
+        const history = (await repo.listChanges(e.id)).sort(byChangeOrder).map(toStudentVisible);
+        return {
+          ...rest,
+          source: provenance
+            ? {
+                recordingSessionId: provenance.recordingSessionId,
+                transcriptId: provenance.transcriptId,
+                segmentIndex: provenance.segmentIndex,
+                startMs: provenance.startMs,
+                endMs: provenance.endMs,
+                quote: provenance.quote,
+                confirmedAt: provenance.confirmedAt,
+              }
+            : null,
+          history,
+        };
+      }),
+    );
+    return { studentId, items, total: items.length };
+  });
+
+  // ---- ICS export (3.10) ------------------------------------------------------
+  app.post('/v1/students/:studentId/calendar-feed-token', async (req, reply) => {
+    const { studentId } = StudentParamSchema.parse(req.params);
+    const previous = await feedTokens.get(studentId);
+    const { token, tokenHash } = generateFeedToken();
+    const createdAt = clock.now().toISOString();
+    await feedTokens.put({ studentId, tokenHash, createdAt });
+    return reply
+      .status(201)
+      .header('cache-control', 'no-store')
+      .send({
+        studentId,
+        token,
+        feedPath: `/v1/students/${studentId}/calendar.ics?token=${token}`,
+        createdAt,
+        rotated: previous !== undefined,
+      });
+  });
+
+  app.get('/v1/students/:studentId/calendar.ics', async (req, reply) => {
+    const { studentId } = StudentParamSchema.parse(req.params);
+    const { token, from } = FeedQuerySchema.parse(req.query);
+    const record = await feedTokens.get(studentId);
+    // Same answer for unknown student, missing token and wrong token (no enumeration).
+    if (token === undefined || record === undefined || !verifyFeedToken(token, record.tokenHash)) {
+      throw new AppError(401, 'invalid_feed_token', 'Invalid or revoked calendar feed token');
+    }
+    const events = await studentEvents(studentId, { from, includeCancelled: true });
+    const sections = new Map<string, SectionRecord>();
+    for (const id of new Set(events.map((e) => e.classSectionId))) {
+      const s = await repo.getSection(id);
+      if (s) sections.set(id, s);
+    }
+    const body = renderIcs(events, {
+      calendarName: 'Calendário acadêmico',
+      generatedAt: clock.now(),
+      sections,
+    });
+    return reply
+      .header('content-type', 'text/calendar; charset=utf-8')
+      .header('content-disposition', 'inline; filename="calendario-academico.ics"')
+      .header('cache-control', 'private, max-age=300')
+      .send(body);
   });
 
   return app;

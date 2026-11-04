@@ -93,7 +93,20 @@ export interface SectionRecord {
   institutionId: string;
   courseId: string;
   professorId: string | null;
+  courseName: string | null;
+  sectionCode: string | null;
 }
+
+/** Change record as shown to students: who changed it (person) is not exposed. */
+export type StudentVisibleChange = Omit<CalendarEventChange, 'changedBy'>;
+
+export const toStudentVisible = ({
+  changedBy: _omit,
+  ...rest
+}: CalendarEventChange): StudentVisibleChange => rest;
+
+export const byChangeOrder = (a: CalendarEventChange, b: CalendarEventChange): number =>
+  a.changedAt.localeCompare(b.changedAt);
 
 export interface NonTeachingDay {
   institutionId: string;

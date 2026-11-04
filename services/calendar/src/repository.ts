@@ -97,7 +97,11 @@ export class InMemoryCalendarRepository implements CalendarRepository {
   }
 
   async listChanges(calendarEventId: string): Promise<CalendarEventChange[]> {
-    return this.changes.filter((c) => c.calendarEventId === calendarEventId).map((c) => ({ ...c }));
+    // stable sort keeps insertion order for changes recorded in the same instant
+    return this.changes
+      .filter((c) => c.calendarEventId === calendarEventId)
+      .map((c) => ({ ...c }))
+      .sort((a, b) => a.changedAt.localeCompare(b.changedAt));
   }
 
   async upsertSection(section: SectionRecord): Promise<void> {

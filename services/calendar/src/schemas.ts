@@ -79,10 +79,23 @@ export const ListEventsQuerySchema = z.object({
     .optional(),
 });
 
+/** Students see cancellations by default (status is part of the student view, 3.8). */
 export const StudentEventsQuerySchema = ListEventsQuerySchema.pick({
   from: true,
   to: true,
   includeCancelled: true,
+}).refine((q) => q.from === undefined || q.to === undefined || q.from <= q.to, {
+  path: ['to'],
+  message: 'to must be on or after from',
+});
+
+export const HistoryQuerySchema = z.object({
+  view: z.enum(['full', 'student']).default('full'),
+});
+
+export const FeedQuerySchema = z.object({
+  token: z.string().min(1).max(200).optional(),
+  from: isoDate.optional(),
 });
 
 export const ConflictCheckSchema = z.object({
@@ -99,6 +112,8 @@ const SectionSchema = z.object({
   institutionId: uuid,
   courseId: uuid,
   professorId: uuid.optional(),
+  courseName: z.string().trim().min(1).max(255).optional(),
+  sectionCode: z.string().trim().min(1).max(50).optional(),
 });
 export const SectionsSyncSchema = z.object({ sections: z.array(SectionSchema).min(1).max(5000) });
 
