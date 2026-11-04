@@ -297,6 +297,10 @@ class LlmExtractor:
                 "courseName": ctx.course_name or "",
                 "timezone": ctx.timezone,
                 "eventTypes": list(EVENT_TYPES),
+                "upcomingClasses": ", ".join(
+                    ref.class_date.isoformat() for ref in ctx.upcoming_classes[:8]
+                )
+                or "nenhuma informada",
             },
             "untrustedInputs": {"transcript": format_transcript(segments)},
             "responseSchema": EVENT_EXTRACTION_SCHEMA,
